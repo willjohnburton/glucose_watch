@@ -14,16 +14,22 @@ companion, no account.
   - amber for 3.5–4.0 or 10.0–13.0
   - red below 3.5 or above 13.0
 - Trend arrow next to the glucose (↑ ↗ → ↘ ↓)
+- Battery percentage below the glucose number (red below 15%)
 - "X min" since last reading at the bottom
 - Small red dot if no reading received for ≥5 min
+- Battery and "X min" hidden in ambient mode
 
 **Insulin logger** (tap the glucose number on the watch face)
 - Number picker, 1–50 whole units, driven by the rotating bezel
-- Two confirm buttons:
+- Primary row — single tap commits both the units and the type:
   - **Fast** (amber) — bolus / mealtime insulin
   - **Slow** (blue) — basal / background insulin
-- Brief vibration on confirm, then closes back to the watch face
-- Each entry captures: units, type, timestamp, glucose snapshot, trend
+- Secondary row:
+  - **✕ Cancel** (gray) — close without writing anything to Room
+  - **Del** (red) — delete the most recent entry (longer vibration so an
+    accidental tap is noticeable; no confirmation dialog)
+- Brief vibration on commit, longer pulse on delete
+- Each logged entry captures: units, type, timestamp, glucose snapshot, trend
 
 **Local storage**
 - Room SQLite database on the watch (`bg.db`)
@@ -329,6 +335,14 @@ Confirm with `aapt dump badging app-debug.apk | grep watch`.
 - The mock provider is gated by `Build.HARDWARE in {goldfish, ranchu}` rather
   than a `BuildConfig` flag so the same debug APK works correctly on both
   emulator (mock) and real watch (no mock).
+- Battery is read via `BatteryManager.BATTERY_PROPERTY_CAPACITY` on every
+  render tick rather than a `BroadcastReceiver` on `ACTION_BATTERY_CHANGED`;
+  it's a single binder call and the render rate is 1 Hz, so cost is trivial
+  and we avoid the lifecycle complexity of keeping a receiver alive inside the
+  watch-face service.
+- Delete in the logger uses `DELETE WHERE id = (SELECT MAX(id) ...)` rather
+  than tracking the just-inserted row, so the delete works correctly when the
+  logger is opened after a previous accidental commit.
 
 ## Known limitations
 
