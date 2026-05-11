@@ -7,7 +7,13 @@ import androidx.room.PrimaryKey
 data class InsulinEntry(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val units: Int,
+    val type: String,
     val timestampMs: Long,
     val glucoseMmol: Double?,
     val trend: String?,
-)
+) {
+    companion object {
+        const val TYPE_FAST = "fast"
+        const val TYPE_SLOW = "slow"
+    }
+}

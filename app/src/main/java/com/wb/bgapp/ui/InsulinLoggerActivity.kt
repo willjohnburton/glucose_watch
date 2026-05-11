@@ -25,10 +25,11 @@ class InsulinLoggerActivity : ComponentActivity() {
         }
     }
 
-    private fun logUnits(units: Int) {
+    private fun logUnits(units: Int, type: String) {
         val reading = GlucoseRepository.latest.value
         val entry = InsulinEntry(
             units = units,
+            type = type,
             timestampMs = System.currentTimeMillis(),
             glucoseMmol = reading?.mmol,
             trend = reading?.trend?.name,
