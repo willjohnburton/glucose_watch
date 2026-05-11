@@ -21,6 +21,8 @@ class InsulinLoggerActivity : ComponentActivity() {
         setContent {
             InsulinLoggerScreen(
                 onConfirm = ::logUnits,
+                onCancel = ::cancel,
+                onDeleteLast = ::deleteLast,
             )
         }
     }
@@ -38,17 +40,31 @@ class InsulinLoggerActivity : ComponentActivity() {
         app.appScope.launch {
             AppDatabase.get(this@InsulinLoggerActivity).insulinDao().insert(entry)
         }
-        vibrate()
+        vibrate(80)
         finish()
     }
 
-    private fun vibrate() {
+    private fun cancel() {
+        finish()
+    }
+
+    private fun deleteLast() {
+        val app = application as BgApplication
+        app.appScope.launch {
+            AppDatabase.get(this@InsulinLoggerActivity).insulinDao().deleteLatest()
+        }
+        // Longer pulse so an accidental delete is felt.
+        vibrate(200)
+        finish()
+    }
+
+    private fun vibrate(durationMs: Long) {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
         } else {
             @Suppress("DEPRECATION")
             getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
-        vibrator.vibrate(VibrationEffect.createOneShot(80, VibrationEffect.DEFAULT_AMPLITUDE))
+        vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
     }
 }

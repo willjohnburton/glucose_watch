@@ -1,11 +1,13 @@
 package com.wb.bgapp.watchface
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.BatteryManager
 import android.view.SurfaceHolder
 import androidx.wear.watchface.CanvasType
 import androidx.wear.watchface.ComplicationSlotsManager
@@ -39,7 +41,7 @@ class BgWatchFaceService : WatchFaceService() {
         complicationSlotsManager: ComplicationSlotsManager,
         currentUserStyleRepository: CurrentUserStyleRepository,
     ): WatchFace {
-        val renderer = BgRenderer(surfaceHolder, watchState, currentUserStyleRepository)
+        val renderer = BgRenderer(this, surfaceHolder, watchState, currentUserStyleRepository)
         return WatchFace(WatchFaceType.DIGITAL, renderer)
             .setTapListener(object : WatchFace.TapListener {
                 override fun onTapEvent(
@@ -58,6 +60,7 @@ class BgWatchFaceService : WatchFaceService() {
 }
 
 private class BgRenderer(
+    context: Context,
     surfaceHolder: SurfaceHolder,
     watchState: WatchState,
     userStyle: CurrentUserStyleRepository,
@@ -106,6 +109,13 @@ private class BgRenderer(
         isAntiAlias = true
         textAlign = Paint.Align.CENTER
     }
+    private val batteryPaint = Paint().apply {
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+
+    private val batteryManager =
+        context.applicationContext.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
 
     override suspend fun createSharedAssets(): Shared = Shared()
 
@@ -155,6 +165,15 @@ private class BgRenderer(
                     val r = w * 0.018f
                     canvas.drawCircle(cx, bounds.bottom - w * 0.18f, r, stalePaint)
                 }
+            }
+        }
+
+        if (!isAmbient) {
+            val pct = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            if (pct in 0..100) {
+                batteryPaint.color = if (pct <= 15) Color.rgb(255, 80, 80) else Color.LTGRAY
+                batteryPaint.textSize = w * 0.06f
+                canvas.drawText("$pct%", cx, glucoseBaseY + w * 0.12f, batteryPaint)
             }
         }
     }

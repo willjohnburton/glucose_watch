@@ -12,4 +12,10 @@ interface InsulinDao {
 
     @Query("SELECT * FROM insulin_entries ORDER BY timestampMs DESC LIMIT 100")
     fun recent(): Flow<List<InsulinEntry>>
+
+    @Query("SELECT * FROM insulin_entries ORDER BY id DESC LIMIT 1")
+    suspend fun latest(): InsulinEntry?
+
+    @Query("DELETE FROM insulin_entries WHERE id = (SELECT MAX(id) FROM insulin_entries)")
+    suspend fun deleteLatest(): Int
 }
