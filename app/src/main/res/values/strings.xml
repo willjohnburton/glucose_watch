@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BG</string>
+    <string name="watch_face_name">BG Watch</string>
+    <string name="insulin_units_label">units</string>
+    <string name="confirm">Log</string>
+    <string name="logged">Logged</string>
+    <string name="no_reading">--</string>
+</resources>
