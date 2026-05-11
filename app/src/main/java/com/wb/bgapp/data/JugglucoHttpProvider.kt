@@ -1,5 +1,6 @@
 package com.wb.bgapp.data
 
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -12,6 +13,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import java.util.concurrent.TimeUnit
+
+private const val TAG = "BgHttp"
 
 class JugglucoHttpProvider(
     private val scope: CoroutineScope,
@@ -48,21 +51,31 @@ class JugglucoHttpProvider(
         runCatching {
             val req = Request.Builder().url(url).build()
             client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@use null
+                if (!resp.isSuccessful) {
+                    Log.w(TAG, "http ${resp.code} from $url")
+                    return@use null
+                }
                 val body = resp.body?.string() ?: return@use null
                 val arr = JSONArray(body)
-                if (arr.length() == 0) return@use null
+                if (arr.length() == 0) {
+                    Log.w(TAG, "empty entries array from $url")
+                    return@use null
+                }
                 val obj = arr.getJSONObject(0)
                 val mgdl = obj.optDouble("sgv", Double.NaN)
-                if (mgdl.isNaN()) return@use null
+                if (mgdl.isNaN()) {
+                    Log.w(TAG, "no sgv in $obj")
+                    return@use null
+                }
                 val timeMs = obj.optLong("date", System.currentTimeMillis())
                 val direction = obj.optString("direction").takeIf { it.isNotEmpty() }
+                Log.i(TAG, "sgv=$mgdl dir=$direction time=$timeMs")
                 GlucoseReading(
                     mmol = mgdl / 18.0,
                     trend = GlucoseTrend.fromNightscoutDirection(direction),
                     timestampMs = timeMs,
                 )
             }
-        }.getOrNull()
+        }.onFailure { Log.w(TAG, "fetch failed: ${it.message}") }.getOrNull()
     }
 }

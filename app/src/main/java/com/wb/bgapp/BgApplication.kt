@@ -6,6 +6,7 @@ import android.content.IntentFilter
 import android.os.Build
 import com.wb.bgapp.data.GlucoseRepository
 import com.wb.bgapp.data.JugglucoBroadcastReceiver
+import com.wb.bgapp.data.JugglucoHttpProvider
 import com.wb.bgapp.data.MockGlucoseProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,8 @@ class BgApplication : Application() {
 
         if (isEmulator()) {
             GlucoseRepository.bind(MockGlucoseProvider(appScope))
+        } else {
+            GlucoseRepository.bind(JugglucoHttpProvider(appScope))
         }
 
         val filter = IntentFilter().apply {
