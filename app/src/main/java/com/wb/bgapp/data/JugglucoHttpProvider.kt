@@ -56,7 +56,7 @@ class JugglucoHttpProvider(
                 val mgdl = obj.optDouble("sgv", Double.NaN)
                 if (mgdl.isNaN()) return@use null
                 val timeMs = obj.optLong("date", System.currentTimeMillis())
-                val direction = obj.optString("direction", null)
+                val direction = obj.optString("direction").takeIf { it.isNotEmpty() }
                 GlucoseReading(
                     mmol = mgdl / 18.0,
                     trend = GlucoseTrend.fromNightscoutDirection(direction),

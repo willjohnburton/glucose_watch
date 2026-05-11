@@ -117,34 +117,34 @@ private class BgRenderer(
         val isAmbient = renderParameters.drawMode == androidx.wear.watchface.DrawMode.AMBIENT
 
         val timeText = zonedDateTime.withZoneSameInstant(zone).format(timeFmt)
-        timePaint.textSize = w * 0.30f
-        val timeY = bounds.exactCenterY() - w * 0.05f
+        timePaint.textSize = w * 0.18f
+        val timeY = bounds.exactCenterY() - w * 0.18f
         canvas.drawText(timeText, cx, timeY, timePaint)
 
         val reading = GlucoseRepository.latest.value
         val nowMs = System.currentTimeMillis()
 
-        val glucoseBaseY = bounds.exactCenterY() + w * 0.20f
+        val glucoseBaseY = bounds.exactCenterY() + w * 0.14f
         if (reading == null) {
             glucosePaint.color = Color.LTGRAY
-            glucosePaint.textSize = w * 0.18f
+            glucosePaint.textSize = w * 0.26f
             canvas.drawText("--", cx, glucoseBaseY, glucosePaint)
-            glucoseHitRect.set((cx - w * 0.25f).toInt(), (glucoseBaseY - w * 0.20f).toInt(),
-                (cx + w * 0.25f).toInt(), (glucoseBaseY + w * 0.05f).toInt())
+            glucoseHitRect.set((cx - w * 0.30f).toInt(), (glucoseBaseY - w * 0.28f).toInt(),
+                (cx + w * 0.30f).toInt(), (glucoseBaseY + w * 0.05f).toInt())
         } else {
             glucosePaint.color = if (isAmbient) Color.WHITE else colourFor(reading.mmol)
-            glucosePaint.textSize = w * 0.22f
+            glucosePaint.textSize = w * 0.34f
             val glucoseText = String.format("%.1f", reading.mmol)
             canvas.drawText(glucoseText, cx, glucoseBaseY, glucosePaint)
 
             val textWidth = glucosePaint.measureText(glucoseText)
             trendPaint.color = glucosePaint.color
-            trendPaint.textSize = w * 0.16f
+            trendPaint.textSize = w * 0.20f
             val trendX = cx + textWidth / 2f + w * 0.02f
             canvas.drawText(reading.trend.symbol, trendX, glucoseBaseY, trendPaint)
 
-            glucoseHitRect.set((cx - w * 0.30f).toInt(), (glucoseBaseY - w * 0.22f).toInt(),
-                (cx + w * 0.30f).toInt(), (glucoseBaseY + w * 0.05f).toInt())
+            glucoseHitRect.set((cx - w * 0.35f).toInt(), (glucoseBaseY - w * 0.34f).toInt(),
+                (cx + w * 0.35f).toInt(), (glucoseBaseY + w * 0.05f).toInt())
 
             if (!isAmbient) {
                 val minsAgo = ((nowMs - reading.timestampMs) / 60_000L).toInt().coerceAtLeast(0)
