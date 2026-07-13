@@ -17,6 +17,7 @@ Usage:
 Defaults write into iCloud Drive's Health/ folder.
 """
 import argparse
+import bisect
 import csv
 import datetime as dt
 import json
@@ -77,6 +78,40 @@ def load_insulin(path):
             rows.append((ms, local, units, r["type"]))
     rows.sort()
     return rows
+
+
+def dose_responses(glucose, insulin):
+    """For each dose, sample glucose from -30 min to +4 h relative to the dose,
+    aligned at t=0. Nearest reading within a tight tolerance; None where the
+    sensor had a gap. Aggregation (median/percentiles, stratification) happens
+    client-side so the filters can be interactive."""
+    g_epochs = [g[0] for g in glucose]
+    g_vals = [g[2] for g in glucose]
+
+    def nearest(t, tol):
+        i = bisect.bisect_left(g_epochs, t)
+        best, bd = None, tol + 1
+        for j in (i - 1, i, i + 1):
+            if 0 <= j < len(g_epochs):
+                d = abs(g_epochs[j] - t)
+                if d < bd:
+                    bd, best = d, g_vals[j]
+        return best if bd <= tol else None
+
+    offsets = list(range(-30, 241, 15))  # minutes relative to the dose
+    doses = []
+    for ms, local, units, typ in insulin:
+        t0 = ms // 1000
+        g0 = nearest(t0, 600)  # need a reading within 10 min of the dose
+        if g0 is None:
+            continue
+        resp = [nearest(t0 + o * 60, 480) for o in offsets]  # within 8 min each
+        doses.append({
+            "t0": t0, "u": units, "type": typ, "hour": local.hour,
+            "g0": round(g0, 1),
+            "r": [None if g is None else round(g, 1) for g in resp],
+        })
+    return {"offsets": offsets, "doses": doses}
 
 
 def build(glucose, insulin):
@@ -173,6 +208,7 @@ def build(glucose, insulin):
         "agp": agp,
         "daily": daily,
         "trace": {"start": cutoff, "end": last, "points": pts, "insulin": ins},
+        "response": dose_responses(glucose, insulin),
     }
 
 
@@ -288,6 +324,19 @@ th{color:var(--muted);font-weight:500;position:sticky;top:0;background:var(--sur
 .tip .row{color:var(--ink2)}
 .foot{color:var(--muted);font-size:12px;margin-top:8px}
 .note{color:var(--ink2);font-size:12.5px;margin:0 0 12px}
+.note em{font-style:normal;color:var(--ink);font-weight:600}
+.filters{display:flex;flex-wrap:wrap;gap:14px 22px;margin:0 0 14px}
+.fgroup{display:flex;flex-direction:column;gap:5px}
+.flabel{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{background:var(--plane);border:1px solid var(--ring);color:var(--ink2);
+  border-radius:999px;padding:5px 11px;font:inherit;font-size:12.5px;cursor:pointer;
+  white-space:nowrap;-webkit-tap-highlight-color:transparent}
+.chip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+.respsum{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.respsum .card{background:var(--plane);border:1px solid var(--ring);border-radius:10px;
+  padding:9px 12px;font-size:12.5px;color:var(--ink2)}
+.respsum .card b{display:block;font-size:18px;color:var(--ink);font-weight:650}
 </style>
 </head>
 <body>
@@ -316,6 +365,14 @@ HTML_BODY = r"""
   <h2>Ambulatory Glucose Profile (AGP)</h2>
   <p class="note">Every day's readings folded onto one 24-hour clock. The line is the median; the dark band is the middle 50% (25–75th percentile), the light band the 5–95th. The green zone is the 3.9–10.0 target range.</p>
   <figure class="scroll"><svg id="agp" role="img" aria-label="Ambulatory glucose profile"></svg></figure>
+</section>
+
+<section>
+  <h2>Insulin &rarr; glucose response</h2>
+  <p class="note">Every dose lined up at the moment of injection (0 h), showing the typical glucose path over the next 4 hours &mdash; median line, with the 25&ndash;75% spread shaded. Split by the glucose you <em>started</em> at: doses started high are usually corrections; doses started in range are usually meals (expect a rise). Exploratory only &mdash; not dosing advice.</p>
+  <div class="filters" id="resp-filters"></div>
+  <figure class="scroll"><svg id="resp" role="img" aria-label="Post-dose glucose response"></svg></figure>
+  <div id="resp-summary" class="respsum"></div>
 </section>
 
 <section>
@@ -592,7 +649,154 @@ function renderTable(){
     + '<td style="color:var(--muted)">' + d.cov + '%</td></tr>').join('');
 }
 
-function renderAll(){ renderTIR(); renderAGP(); renderTrace(); }
+// ---- Insulin -> glucose response ----
+const respState = {type:'fast', start:'all', tod:'all', mode:'abs'};
+const RESP_FILTERS = [
+  {key:'type',  label:'Dose',       opts:[['fast','Fast'],['slow','Slow'],['all','All']]},
+  {key:'start', label:'Started at', opts:[['all','All'],['high','High >10'],['in','In range'],['low','Low <3.9']]},
+  {key:'tod',   label:'Time',       opts:[['all','All'],['day','Day 6–22'],['night','Night 22–6']]},
+  {key:'mode',  label:'Show',       opts:[['abs','Glucose'],['delta','Change']]},
+];
+function quant(arr, q){
+  if (!arr.length) return null;
+  const a = arr.slice().sort((x,y)=>x-y);
+  const idx = (a.length-1)*q, lo = Math.floor(idx), hi = Math.min(lo+1, a.length-1);
+  return a[lo] + (a[hi]-a[lo])*(idx-lo);
+}
+function respSubset(){
+  return DATA.response.doses.filter(d => {
+    if (respState.type !== 'all' && d.type !== respState.type) return false;
+    if (respState.start === 'high' && !(d.g0 > 10)) return false;
+    if (respState.start === 'in'   && !(d.g0 >= 3.9 && d.g0 <= 10)) return false;
+    if (respState.start === 'low'  && !(d.g0 < 3.9)) return false;
+    if (respState.tod === 'day'   && !(d.hour >= 6 && d.hour < 22)) return false;
+    if (respState.tod === 'night' &&  (d.hour >= 6 && d.hour < 22)) return false;
+    return true;
+  });
+}
+function buildRespFilters(){
+  const host = document.getElementById('resp-filters');
+  host.innerHTML = RESP_FILTERS.map(f =>
+    '<div class="fgroup"><span class="flabel">' + f.label + '</span><div class="chips">'
+    + f.opts.map(([v,lab]) =>
+        '<button class="chip" data-k="' + f.key + '" data-v="' + v + '">' + lab + '</button>').join('')
+    + '</div></div>').join('');
+  host.querySelectorAll('.chip').forEach(c => {
+    c.onclick = () => { respState[c.dataset.k] = c.dataset.v; renderResponse(); };
+  });
+}
+function renderResponse(){
+  // reflect active chips
+  document.querySelectorAll('#resp-filters .chip').forEach(c =>
+    c.setAttribute('aria-pressed', respState[c.dataset.k] === c.dataset.v));
+
+  const offs = DATA.response.offsets;
+  const subset = respSubset();
+  const delta = respState.mode === 'delta';
+  const series = offs.map((o,i) => {
+    const vals = [];
+    subset.forEach(d => { const g = d.r[i]; if (g != null) vals.push(delta ? +(g - d.g0).toFixed(1) : g); });
+    return {o, n: vals.length, p25: quant(vals,0.25), p50: quant(vals,0.5), p75: quant(vals,0.75)};
+  }).filter(s => s.p50 != null);
+
+  const svg = document.getElementById('resp');
+  svg.innerHTML = '';
+  const W = 900, H = 300, mL = 44, mR = 12, mT = 12, mB = 30;
+  const iw = W - mL - mR, ih = H - mT - mB;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  const oMin = -30, oMax = 240;
+  const X = o => mL + (o - oMin)/(oMax - oMin)*iw;
+
+  let yMin, yMax;
+  if (delta){
+    let lo = 0, hi = 0;
+    series.forEach(s => { lo = Math.min(lo, s.p25); hi = Math.max(hi, s.p75); });
+    const pad = Math.max(1, (hi-lo)*0.1); yMin = lo-pad; yMax = hi+pad;
+  } else { yMin = 2; yMax = 21; }
+  const Y = v => mT + (1 - (Math.min(yMax,Math.max(yMin,v))-yMin)/(yMax-yMin))*ih;
+
+  if (!series.length){
+    const t = el('text', {x:W/2, y:H/2, 'text-anchor':'middle', fill:cssv('--muted'), 'font-size':13});
+    t.textContent = 'No doses match these filters'; svg.appendChild(t);
+    document.getElementById('resp-summary').innerHTML = ''; return;
+  }
+
+  if (!delta){
+    svg.appendChild(el('rect', {x:mL, y:Y(10), width:iw, height:Y(3.9)-Y(10), fill:cssv('--inrange'), opacity:0.10}));
+    [3.9,10].forEach(v => svg.appendChild(el('line', {x1:mL, y1:Y(v), x2:mL+iw, y2:Y(v),
+      stroke:cssv('--inrange'), 'stroke-width':1, 'stroke-dasharray':'4 4', opacity:.5})));
+  } else {
+    svg.appendChild(el('line', {x1:mL, y1:Y(0), x2:mL+iw, y2:Y(0), stroke:cssv('--axis'), 'stroke-width':1.5}));
+  }
+  // y ticks
+  const yticks = delta
+    ? (() => { const out=[]; const step = (yMax-yMin)>12?4:2; for (let v=Math.ceil(yMin/step)*step; v<=yMax; v+=step) out.push(v); return out; })()
+    : [2,5,8,11,14,17,20];
+  yticks.forEach(v => {
+    svg.appendChild(el('line', {x1:mL, y1:Y(v), x2:mL+iw, y2:Y(v), stroke:cssv('--grid'), 'stroke-width':1}));
+    const t = el('text', {x:mL-8, y:Y(v), 'text-anchor':'end', 'dominant-baseline':'middle'});
+    t.setAttribute('class','tick'); t.textContent = (delta && v>0?'+':'') + v; svg.appendChild(t);
+  });
+  // x ticks (hours) + dose line at 0
+  for (let m=0; m<=240; m+=60){
+    svg.appendChild(el('line', {x1:X(m), y1:mT, x2:X(m), y2:mT+ih, stroke:cssv('--grid'), 'stroke-width':1}));
+    const t = el('text', {x:X(m), y:H-8, 'text-anchor':'middle'});
+    t.setAttribute('class','tick'); t.textContent = (m/60) + 'h'; svg.appendChild(t);
+  }
+  svg.appendChild(el('line', {x1:X(0), y1:mT, x2:X(0), y2:mT+ih, stroke:cssv('--fast'), 'stroke-width':1.5, 'stroke-dasharray':'3 3'}));
+  const dl0 = el('text', {x:X(0), y:mT+10, 'text-anchor':'middle', fill:cssv('--fast'), 'font-size':10, 'font-weight':600});
+  dl0.textContent = 'dose'; svg.appendChild(dl0);
+
+  // IQR band + median
+  let band = 'M' + X(series[0].o) + ' ' + Y(series[0].p75);
+  series.forEach(s => band += ' L' + X(s.o) + ' ' + Y(s.p75));
+  for (let i=series.length-1;i>=0;i--) band += ' L' + X(series[i].o) + ' ' + Y(series[i].p25);
+  svg.appendChild(el('path', {d:band+' Z', fill:cssv('--blue'), opacity:.24}));
+  let dm = 'M' + X(series[0].o) + ' ' + Y(series[0].p50);
+  series.forEach(s => dm += ' L' + X(s.o) + ' ' + Y(s.p50));
+  svg.appendChild(el('path', {d:dm, fill:'none', stroke:cssv('--blue'), 'stroke-width':2.5, 'stroke-linejoin':'round'}));
+
+  // hover
+  const cross = el('line', {y1:mT, y2:mT+ih, stroke:cssv('--axis'), 'stroke-width':1, opacity:0});
+  const dot = el('circle', {r:4, fill:cssv('--blue'), stroke:cssv('--surface'), 'stroke-width':2, opacity:0});
+  svg.appendChild(cross); svg.appendChild(dot);
+  const hit = el('rect', {x:mL, y:mT, width:iw, height:ih, fill:'transparent'});
+  hit.style.cursor = 'crosshair';
+  hit.addEventListener('pointermove', e => {
+    const r = svg.getBoundingClientRect();
+    const o = oMin + ((e.clientX-r.left)/r.width*W - mL)/iw*(oMax-oMin);
+    let best = series[0]; for (const s of series) if (Math.abs(s.o-o) < Math.abs(best.o-o)) best = s;
+    cross.setAttribute('x1', X(best.o)); cross.setAttribute('x2', X(best.o)); cross.setAttribute('opacity',1);
+    dot.setAttribute('cx', X(best.o)); dot.setAttribute('cy', Y(best.p50)); dot.setAttribute('opacity',1);
+    const sign = delta && best.p50>0 ? '+' : '';
+    const unit = delta ? ' mmol/L' : ' mmol/L';
+    showTip(e, '<b>' + (best.o>=0?'+':'') + (best.o/60).toFixed(best.o%60?2:0) + ' h</b>'
+      + '<div class="row">Median ' + sign + best.p50.toFixed(1) + unit + '</div>'
+      + '<div class="row">Middle 50%: ' + best.p25.toFixed(1) + ' to ' + best.p75.toFixed(1) + '</div>'
+      + '<div class="row">' + best.n + ' doses w/ data</div>');
+  });
+  hit.addEventListener('pointerleave', () => { hideTip(); cross.setAttribute('opacity',0); dot.setAttribute('opacity',0); });
+  svg.appendChild(hit);
+  const yt = el('text', {x:13, y:mT+ih/2, 'text-anchor':'middle', transform:'rotate(-90 13 ' + (mT+ih/2) + ')'});
+  yt.setAttribute('class','axtitle'); yt.textContent = delta ? 'change from dose (mmol/L)' : 'mmol/L'; svg.appendChild(yt);
+
+  // summary cards
+  const at = m => series.find(s => s.o === m);
+  const g0med = quant(subset.map(d => d.g0), 0.5);
+  const s180 = at(180), s120 = at(120);
+  const chgTxt = s => s == null ? '–' : (delta ? (s.p50>0?'+':'') + s.p50.toFixed(1) : s.p50.toFixed(1));
+  const cards = [
+    ['Doses', subset.length + ''],
+    ['Median start', g0med==null?'–':g0med.toFixed(1) + ' mmol/L'],
+    [delta?'Change @2h':'Median @2h', chgTxt(s120)],
+    [delta?'Change @3h':'Median @3h', chgTxt(s180)],
+  ];
+  document.getElementById('resp-summary').innerHTML = cards.map(([l,v]) =>
+    '<div class="card"><b>' + v + '</b>' + l + '</div>').join('');
+}
+
+function renderAll(){ renderTIR(); renderAGP(); renderResponse(); renderTrace(); }
+buildRespFilters();
 renderAll();
 renderTable();
 addEventListener('resize', () => { /* SVGs are responsive via viewBox */ });

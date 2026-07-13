@@ -352,6 +352,16 @@ python3 tools/build-dashboard.py
 # → ~/Library/Mobile Documents/com~apple~CloudDocs/Health/glucose-dashboard.html
 ```
 
+The **Insulin → glucose response** section is the analytical core: it lines every
+dose up at the moment of injection (t=0) and plots the median glucose path over
+the next 4 hours (with the 25–75% spread), filterable by dose type, the glucose
+you *started* at, and time of day, in absolute or change-from-dose mode. Splitting
+by starting glucose separates the two regimes — doses started high trace the real
+correction response (how far/fast insulin brings you down), while doses started in
+range trace meal boluses (glucose rises as food outpaces the dose). It is
+exploratory, not dosing advice; the insulin log doesn't tag meal vs correction, so
+starting-glucose is the proxy.
+
 By default it writes into **iCloud Drive**, so the same file opens on macOS
 (double-click) and iOS (Files app → iCloud Drive → Health → tap it). The data
 never leaves your Apple account — nothing is hosted. Override paths with
