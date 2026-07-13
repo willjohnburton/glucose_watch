@@ -411,6 +411,14 @@ HTML_BODY = r"""
 </section>
 
 <section>
+  <h2>Insulin sensitivity by time of day</h2>
+  <p class="note">For corrective doses (fast, started above the threshold), how much 1 unit lowers glucose, split by the time it was given &mdash; <em>taller bar = more sensitive</em>. Each bar is a through-origin fit (drop &prop; units), so dose size is accounted for; the muted number under it is the units to drop your target amount at that time. <b>n</b> is the dose count &mdash; treat thin-sample bars with caution.</p>
+  <div class="filters" id="sens-filters"></div>
+  <figure class="scroll"><svg id="sens" role="img" aria-label="Insulin sensitivity by time of day"></svg></figure>
+  <div id="sens-summary" class="respsum"></div>
+</section>
+
+<section>
   <h2>Overnight &amp; dawn</h2>
   <p class="note">Midnight&ndash;8am glucose folded across every night: median line, 25&ndash;75% band, target zone. The dawn cards show the median rise from 3am to wake.</p>
   <figure class="scroll"><svg id="overnight" role="img" aria-label="Overnight glucose profile"></svg></figure>
@@ -947,6 +955,128 @@ function renderScatter(subset){
   ].map(([l,v]) => '<div class="card"><b>' + v + '</b>' + l + '</div>').join('');
 }
 
+// ---- Insulin sensitivity by time of day ----
+const sensState = {thr:'10', win:'180', buckets:'8', target:'3'};
+const SENS_FILTERS = [
+  {key:'thr',     label:'Corrective (started >)', opts:[['8','8'],['10','10'],['12','12']]},
+  {key:'win',     label:'Measured at',   opts:[['120','2 h'],['180','3 h'],['nadir','nadir 1–4h']]},
+  {key:'buckets', label:'Buckets',       opts:[['8','3-hour'],['6','4-hour'],['4','6-hour']]},
+  {key:'target',  label:'Target drop',   opts:[['2','2'],['3','3'],['4','4']]},
+];
+function buildSensFilters(){
+  const host = document.getElementById('sens-filters');
+  host.innerHTML = SENS_FILTERS.map(f =>
+    '<div class="fgroup"><span class="flabel">' + f.label + '</span><div class="chips">'
+    + f.opts.map(([v,lab]) => '<button class="chip" data-k="' + f.key + '" data-v="' + v + '">' + lab + (f.key==='target'?' mmol':'') + '</button>').join('')
+    + '</div></div>').join('');
+  host.querySelectorAll('.chip').forEach(c => {
+    c.onclick = () => { sensState[c.dataset.k] = c.dataset.v; renderSensitivity(); };
+  });
+}
+function dropOf(d, win){
+  if (win === 'nadir'){
+    let mn = null;
+    DATA.response.offsets.forEach((o,i) => { if (o>=60 && o<=240){ const g=d.r[i]; if (g!=null) mn = mn==null? g : Math.min(mn,g); } });
+    return mn==null ? null : +(d.g0 - mn).toFixed(1);
+  }
+  const i = DATA.response.offsets.indexOf(+win);
+  const g = d.r[i];
+  return g==null ? null : +(d.g0 - g).toFixed(1);
+}
+function renderSensitivity(){
+  document.querySelectorAll('#sens-filters .chip').forEach(c =>
+    c.setAttribute('aria-pressed', sensState[c.dataset.k] === c.dataset.v));
+  const thr = +sensState.thr, win = sensState.win, nb = +sensState.buckets, target = +sensState.target;
+  const span = 24/nb;
+  const corr = DATA.response.doses.filter(d => d.type==='fast' && d.g0 > thr);
+  const buckets = Array.from({length:nb}, (_,b) => ({b, su2:0, sud:0, n:0, lo:b*span, hi:(b+1)*span}));
+  let gSu2=0, gSud=0;
+  corr.forEach(d => {
+    const drop = dropOf(d, win); if (drop==null) return;
+    const bi = Math.min(nb-1, Math.floor(d.hour/span));
+    const bk = buckets[bi]; bk.su2 += d.u*d.u; bk.sud += d.u*drop; bk.n++;
+    gSu2 += d.u*d.u; gSud += d.u*drop;
+  });
+  buckets.forEach(bk => { bk.k = bk.su2>0 ? bk.sud/bk.su2 : null; });
+  const gK = gSu2>0 ? gSud/gSu2 : null;
+
+  const svg = document.getElementById('sens');
+  svg.innerHTML = '';
+  const W = 900, H = 300, mL = 44, mR = 12, mT = 20, mB = 52;
+  const iw = W - mL - mR, ih = H - mT - mB;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  const ks = buckets.map(b=>b.k).filter(v=>v!=null);
+  if (!ks.length){
+    const t = el('text', {x:W/2, y:H/2, 'text-anchor':'middle', fill:cssv('--muted'), 'font-size':13});
+    t.textContent = 'No corrective doses above this threshold'; svg.appendChild(t);
+    document.getElementById('sens-summary').innerHTML = ''; return;
+  }
+  const kMax = Math.max(...ks, 0.1)*1.15, kMin = Math.min(...ks, 0);
+  const Y = v => mT + (1 - (v-kMin)/(kMax-kMin))*ih;
+  const bw = iw/nb;
+  // baseline
+  svg.appendChild(el('line', {x1:mL, y1:Y(0), x2:mL+iw, y2:Y(0), stroke:cssv('--axis'), 'stroke-width':1.5}));
+  // y ticks
+  const stepK = kMax>2?0.5:0.25;
+  for (let v=Math.ceil(kMin/stepK)*stepK; v<=kMax; v+=stepK){
+    svg.appendChild(el('line', {x1:mL, y1:Y(v), x2:mL+iw, y2:Y(v), stroke:cssv('--grid'), 'stroke-width':1}));
+    const t = el('text', {x:mL-8, y:Y(v), 'text-anchor':'end', 'dominant-baseline':'middle'});
+    t.setAttribute('class','tick'); t.textContent = v.toFixed(2); svg.appendChild(t);
+  }
+  // overall reference line
+  if (gK!=null){
+    svg.appendChild(el('line', {x1:mL, y1:Y(gK), x2:mL+iw, y2:Y(gK),
+      stroke:cssv('--fast'), 'stroke-width':1.5, 'stroke-dasharray':'5 4', opacity:.8}));
+    const t = el('text', {x:mL+iw, y:Y(gK)-4, 'text-anchor':'end', fill:cssv('--fast'), 'font-size':10.5});
+    t.textContent = 'overall ' + gK.toFixed(2); svg.appendChild(t);
+  }
+  const fmtH = h => (h<10?'0':'') + h + ':00';
+  buckets.forEach(bk => {
+    const cx = mL + bk.b*bw + bw/2;
+    const x = mL + bk.b*bw + bw*0.16, w = bw*0.68;
+    // x label: time range + units-to-target + n
+    const rng = el('text', {x:cx, y:H-30, 'text-anchor':'middle'});
+    rng.setAttribute('class','tick'); rng.textContent = fmtH(bk.lo) + '–' + fmtH(bk.hi%24); svg.appendChild(rng);
+    if (bk.k==null || bk.n===0){
+      const t = el('text', {x:cx, y:H-16, 'text-anchor':'middle', fill:cssv('--muted'), 'font-size':10}); t.textContent='—'; svg.appendChild(t);
+      return;
+    }
+    const u = bk.k>0 ? target/bk.k : null;
+    const low = bk.n < 5;
+    const r = el('rect', {x, y:Math.min(Y(bk.k),Y(0)), width:w, height:Math.abs(Y(bk.k)-Y(0)),
+      rx:3, fill:cssv('--blue'), opacity: low?0.4:0.9});
+    r.addEventListener('pointermove', e => showTip(e,
+      '<b>' + fmtH(bk.lo) + '–' + fmtH(bk.hi%24) + '</b>'
+      + '<div class="row">' + bk.k.toFixed(2) + ' mmol/L per unit</div>'
+      + (u!=null? '<div class="row">≈ ' + u.toFixed(1) + ' U to drop ' + target + ' mmol</div>':'')
+      + '<div class="row">' + bk.n + ' doses' + (low?' — thin sample':'') + '</div>'));
+    r.addEventListener('pointerleave', hideTip);
+    svg.appendChild(r);
+    const kl = el('text', {x:cx, y:Math.min(Y(bk.k),Y(0))-5, 'text-anchor':'middle',
+      fill:cssv('--ink'), 'font-size':12, 'font-weight':650, opacity: low?0.55:1});
+    kl.textContent = bk.k.toFixed(2); svg.appendChild(kl);
+    // units-to-target under axis (the actionable number)
+    const ul = el('text', {x:cx, y:H-16, 'text-anchor':'middle', fill:cssv('--ink2'), 'font-size':11.5, 'font-weight':600});
+    ul.textContent = u!=null ? '~' + u.toFixed(1) + ' U' : '–'; svg.appendChild(ul);
+    const nl = el('text', {x:cx, y:H-4, 'text-anchor':'middle', fill:cssv('--muted'), 'font-size':10});
+    nl.textContent = 'n=' + bk.n; svg.appendChild(nl);
+  });
+  const yt = el('text', {x:13, y:mT+ih/2, 'text-anchor':'middle', transform:'rotate(-90 13 ' + (mT+ih/2) + ')'});
+  yt.setAttribute('class','axtitle'); yt.textContent = 'mmol/L per unit'; svg.appendChild(yt);
+
+  // summary: most / least sensitive (require n>=5)
+  const solid = buckets.filter(b => b.k!=null && b.n>=5);
+  const best = solid.length ? solid.reduce((a,b)=>b.k>a.k?b:a) : null;
+  const worst = solid.length ? solid.reduce((a,b)=>b.k<a.k?b:a) : null;
+  const uAt = bk => (bk && bk.k>0) ? (target/bk.k).toFixed(1)+' U' : '–';
+  document.getElementById('sens-summary').innerHTML = [
+    ['Overall', gK==null?'–':gK.toFixed(2)+' mmol/U'],
+    ['Most sensitive', best? fmtH(best.lo)+'–'+fmtH(best.hi%24):'–'],
+    ['Least sensitive', worst? fmtH(worst.lo)+'–'+fmtH(worst.hi%24):'–'],
+    ['To drop '+target+' mmol', best&&worst? uAt(best)+' vs '+uAt(worst):'–'],
+  ].map(([l,v]) => '<div class="card"><b>' + v + '</b>' + l + '</div>').join('');
+}
+
 // ---- Overnight & dawn (reuses the AGP percentile bins, 00:00–09:00) ----
 function renderOvernight(){
   const A = DATA.agp.filter(d => d.t <= 540 && d.p50 != null);
@@ -1073,8 +1203,9 @@ function renderDay(){
   ].map(([l,v]) => '<div class="card"><b>' + v + '</b>' + l + '</div>').join('');
 }
 
-function renderAll(){ renderTIR(); renderAGP(); renderResponse(); renderOvernight(); renderDay(); renderTrace(); }
+function renderAll(){ renderTIR(); renderAGP(); renderResponse(); renderSensitivity(); renderOvernight(); renderDay(); renderTrace(); }
 buildRespFilters();
+buildSensFilters();
 buildDaySelector();
 renderAll();
 renderTable();

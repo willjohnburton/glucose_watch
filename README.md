@@ -361,8 +361,14 @@ correction response (how far/fast insulin brings you down), while doses started 
 range trace meal boluses (glucose rises as food outpaces the dose). The insulin log
 doesn't tag meal vs correction, so starting-glucose is the proxy.
 
-Four analyses hang off this:
+Five analyses hang off this:
 
+- **Insulin sensitivity by time of day** — for corrective doses (fast, started
+  above a threshold), a bar per time slot showing mmol/L dropped per unit (a
+  through-origin fit, so dose size is accounted for), with the units needed to hit
+  a target drop under each bar. This is the "how many units for a correction, and
+  does it depend on the time" view. Meal-time slots are confounded (dosing while
+  eating flattens the apparent drop), so trust the non-meal windows.
 - **Split by dose size** — overlays median response curves for 1–3 / 4–6 / 7+ U
   buckets, to see whether bigger doses behave proportionally.
 - **Drop per unit** — a scatter of units given vs. glucose fall by 3 h, with a
