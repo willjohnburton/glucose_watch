@@ -114,6 +114,28 @@ def dose_responses(glucose, insulin):
     return {"offsets": offsets, "doses": doses}
 
 
+def day_detail(glucose, insulin):
+    """Per-day 24h glucose (5-min buckets) + doses, for the day explorer."""
+    days = {}
+    seen = set()
+    for epoch, local, mmol in glucose:
+        d = local.date().isoformat()
+        sod = local.hour * 3600 + local.minute * 60 + local.second
+        key = (d, sod // 300)
+        if key in seen:
+            continue
+        seen.add(key)
+        days.setdefault(d, {"g": [], "ins": []})["g"].append([sod, round(mmol, 1)])
+    for ms, local, units, typ in insulin:
+        d = local.date().isoformat()
+        sod = local.hour * 3600 + local.minute * 60 + local.second
+        days.setdefault(d, {"g": [], "ins": []})["ins"].append([sod, units, typ])
+    for d in days:
+        days[d]["g"].sort()
+        days[d]["ins"].sort()
+    return days
+
+
 def build(glucose, insulin):
     vals = [g[2] for g in glucose]
     n = len(vals)
@@ -209,6 +231,7 @@ def build(glucose, insulin):
         "daily": daily,
         "trace": {"start": cutoff, "end": last, "points": pts, "insulin": ins},
         "response": dose_responses(glucose, insulin),
+        "dayDetail": day_detail(glucose, insulin),
     }
 
 
@@ -266,6 +289,7 @@ HTML_HEAD = """<!doctype html>
   --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,0.10);
   --blue:#2a78d6; --blue-band:rgba(42,120,214,0.14); --blue-iqr:rgba(42,120,214,0.30);
   --fast:#4a3aa7; --slow:#1baf7a;
+  --c1:#2a78d6; --c2:#eb6834; --c3:#4a3aa7;
   --vlow:#a11212; --low:#d03b3b; --inrange:#0ca30c; --high:#eda100; --vhigh:#eb6834;
 }
 :root[data-theme=dark],
@@ -276,6 +300,7 @@ html:root[data-theme=dark]{ color-scheme:dark; }
     --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
     --blue:#3987e5; --blue-band:rgba(57,135,229,0.16); --blue-iqr:rgba(57,135,229,0.32);
     --fast:#9085e9; --slow:#199e70;
+    --c1:#3987e5; --c2:#d95926; --c3:#9085e9;
     --vlow:#c0342f; --low:#e66767; --inrange:#0ca30c; --high:#d17c26; --vhigh:#c74a1e;
   }
 }
@@ -337,6 +362,11 @@ th{color:var(--muted);font-weight:500;position:sticky;top:0;background:var(--sur
 .respsum .card{background:var(--plane);border:1px solid var(--ring);border-radius:10px;
   padding:9px 12px;font-size:12.5px;color:var(--ink2)}
 .respsum .card b{display:block;font-size:18px;color:var(--ink);font-weight:650}
+.subh{font-size:13px;font-weight:600;margin:22px 0 4px;color:var(--ink)}
+.daynav{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.daynav select{flex:1;max-width:260px;background:var(--plane);border:1px solid var(--ring);
+  color:var(--ink);border-radius:8px;padding:7px 10px;font:inherit;font-size:14px}
+.daynav .chip{font-size:15px;line-height:1;padding:7px 12px}
 </style>
 </head>
 <body>
@@ -369,10 +399,33 @@ HTML_BODY = r"""
 
 <section>
   <h2>Insulin &rarr; glucose response</h2>
-  <p class="note">Every dose lined up at the moment of injection (0 h), showing the typical glucose path over the next 4 hours &mdash; median line, with the 25&ndash;75% spread shaded. Split by the glucose you <em>started</em> at: doses started high are usually corrections; doses started in range are usually meals (expect a rise). Exploratory only &mdash; not dosing advice.</p>
+  <p class="note">Every dose lined up at the moment of injection (0 h), showing the typical glucose path over the next 4 hours &mdash; median line, with the 25&ndash;75% spread shaded. Split by the glucose you <em>started</em> at: doses started high are usually corrections; doses started in range are usually meals (expect a rise).</p>
   <div class="filters" id="resp-filters"></div>
   <figure class="scroll"><svg id="resp" role="img" aria-label="Post-dose glucose response"></svg></figure>
+  <div class="legend" id="resp-legend"></div>
   <div id="resp-summary" class="respsum"></div>
+  <h3 class="subh">Drop per unit &middot; 3 h after dose</h3>
+  <p class="note">Each point is one dose: units given vs. how far glucose fell by 3 h (start &minus; 3 h). The line is the best fit through the filtered doses &mdash; its slope is your effective mmol/L per unit. Filter to <em>High &gt;10</em> to isolate corrections.</p>
+  <figure class="scroll"><svg id="scatter" role="img" aria-label="Units vs glucose drop"></svg></figure>
+  <div id="scatter-summary" class="respsum"></div>
+</section>
+
+<section>
+  <h2>Overnight &amp; dawn</h2>
+  <p class="note">Midnight&ndash;8am glucose folded across every night: median line, 25&ndash;75% band, target zone. The dawn cards show the median rise from 3am to wake.</p>
+  <figure class="scroll"><svg id="overnight" role="img" aria-label="Overnight glucose profile"></svg></figure>
+  <div id="overnight-summary" class="respsum"></div>
+</section>
+
+<section>
+  <h2>Day explorer</h2>
+  <div class="daynav">
+    <button class="chip" id="day-prev" aria-label="Previous day">&larr;</button>
+    <select id="day-select" aria-label="Pick a day"></select>
+    <button class="chip" id="day-next" aria-label="Next day">&rarr;</button>
+  </div>
+  <div id="day-summary" class="respsum"></div>
+  <figure class="scroll"><svg id="day" role="img" aria-label="Single day glucose and doses"></svg></figure>
 </section>
 
 <section>
@@ -650,13 +703,26 @@ function renderTable(){
 }
 
 // ---- Insulin -> glucose response ----
-const respState = {type:'fast', start:'all', tod:'all', mode:'abs'};
+const respState = {type:'fast', start:'all', tod:'all', mode:'abs', split:'off'};
 const RESP_FILTERS = [
   {key:'type',  label:'Dose',       opts:[['fast','Fast'],['slow','Slow'],['all','All']]},
   {key:'start', label:'Started at', opts:[['all','All'],['high','High >10'],['in','In range'],['low','Low <3.9']]},
   {key:'tod',   label:'Time',       opts:[['all','All'],['day','Day 6–22'],['night','Night 22–6']]},
   {key:'mode',  label:'Show',       opts:[['abs','Glucose'],['delta','Change']]},
+  {key:'split', label:'Split',      opts:[['off','Off'],['size','By dose size']]},
 ];
+const SIZE_BUCKETS = [
+  {lab:'1–3 U', test:u => u <= 3, cv:'--c1'},
+  {lab:'4–6 U', test:u => u >= 4 && u <= 6, cv:'--c2'},
+  {lab:'7+ U',  test:u => u >= 7, cv:'--c3'},
+];
+function medianCurve(sub, delta){
+  return DATA.response.offsets.map((o,i) => {
+    const vals = [];
+    sub.forEach(d => { const g = d.r[i]; if (g != null) vals.push(delta ? +(g - d.g0).toFixed(1) : g); });
+    return {o, n: vals.length, p25: quant(vals,0.25), p50: quant(vals,0.5), p75: quant(vals,0.75)};
+  }).filter(s => s.p50 != null);
+}
 function quant(arr, q){
   if (!arr.length) return null;
   const a = arr.slice().sort((x,y)=>x-y);
@@ -686,18 +752,22 @@ function buildRespFilters(){
   });
 }
 function renderResponse(){
-  // reflect active chips
   document.querySelectorAll('#resp-filters .chip').forEach(c =>
     c.setAttribute('aria-pressed', respState[c.dataset.k] === c.dataset.v));
 
-  const offs = DATA.response.offsets;
   const subset = respSubset();
   const delta = respState.mode === 'delta';
-  const series = offs.map((o,i) => {
-    const vals = [];
-    subset.forEach(d => { const g = d.r[i]; if (g != null) vals.push(delta ? +(g - d.g0).toFixed(1) : g); });
-    return {o, n: vals.length, p25: quant(vals,0.25), p50: quant(vals,0.5), p75: quant(vals,0.75)};
-  }).filter(s => s.p50 != null);
+  const split = respState.split === 'size';
+
+  let curves;
+  if (split){
+    curves = SIZE_BUCKETS.map(b => {
+      const sub = subset.filter(d => b.test(d.u));
+      return {label:b.lab, color:cssv(b.cv), sub, series:medianCurve(sub, delta)};
+    }).filter(c => c.series.length);
+  } else {
+    curves = [{label:null, color:cssv('--blue'), sub:subset, series:medianCurve(subset, delta)}];
+  }
 
   const svg = document.getElementById('resp');
   svg.innerHTML = '';
@@ -707,19 +777,20 @@ function renderResponse(){
   const oMin = -30, oMax = 240;
   const X = o => mL + (o - oMin)/(oMax - oMin)*iw;
 
+  const allS = curves.flatMap(c => c.series);
+  if (!allS.length){
+    const t = el('text', {x:W/2, y:H/2, 'text-anchor':'middle', fill:cssv('--muted'), 'font-size':13});
+    t.textContent = 'No doses match these filters'; svg.appendChild(t);
+    document.getElementById('resp-summary').innerHTML = '';
+    document.getElementById('resp-legend').innerHTML = ''; return;
+  }
   let yMin, yMax;
   if (delta){
     let lo = 0, hi = 0;
-    series.forEach(s => { lo = Math.min(lo, s.p25); hi = Math.max(hi, s.p75); });
+    allS.forEach(s => { lo = Math.min(lo, s.p25); hi = Math.max(hi, s.p75); });
     const pad = Math.max(1, (hi-lo)*0.1); yMin = lo-pad; yMax = hi+pad;
   } else { yMin = 2; yMax = 21; }
   const Y = v => mT + (1 - (Math.min(yMax,Math.max(yMin,v))-yMin)/(yMax-yMin))*ih;
-
-  if (!series.length){
-    const t = el('text', {x:W/2, y:H/2, 'text-anchor':'middle', fill:cssv('--muted'), 'font-size':13});
-    t.textContent = 'No doses match these filters'; svg.appendChild(t);
-    document.getElementById('resp-summary').innerHTML = ''; return;
-  }
 
   if (!delta){
     svg.appendChild(el('rect', {x:mL, y:Y(10), width:iw, height:Y(3.9)-Y(10), fill:cssv('--inrange'), opacity:0.10}));
@@ -728,7 +799,6 @@ function renderResponse(){
   } else {
     svg.appendChild(el('line', {x1:mL, y1:Y(0), x2:mL+iw, y2:Y(0), stroke:cssv('--axis'), 'stroke-width':1.5}));
   }
-  // y ticks
   const yticks = delta
     ? (() => { const out=[]; const step = (yMax-yMin)>12?4:2; for (let v=Math.ceil(yMin/step)*step; v<=yMax; v+=step) out.push(v); return out; })()
     : [2,5,8,11,14,17,20];
@@ -737,7 +807,6 @@ function renderResponse(){
     const t = el('text', {x:mL-8, y:Y(v), 'text-anchor':'end', 'dominant-baseline':'middle'});
     t.setAttribute('class','tick'); t.textContent = (delta && v>0?'+':'') + v; svg.appendChild(t);
   });
-  // x ticks (hours) + dose line at 0
   for (let m=0; m<=240; m+=60){
     svg.appendChild(el('line', {x1:X(m), y1:mT, x2:X(m), y2:mT+ih, stroke:cssv('--grid'), 'stroke-width':1}));
     const t = el('text', {x:X(m), y:H-8, 'text-anchor':'middle'});
@@ -747,56 +816,266 @@ function renderResponse(){
   const dl0 = el('text', {x:X(0), y:mT+10, 'text-anchor':'middle', fill:cssv('--fast'), 'font-size':10, 'font-weight':600});
   dl0.textContent = 'dose'; svg.appendChild(dl0);
 
-  // IQR band + median
-  let band = 'M' + X(series[0].o) + ' ' + Y(series[0].p75);
-  series.forEach(s => band += ' L' + X(s.o) + ' ' + Y(s.p75));
-  for (let i=series.length-1;i>=0;i--) band += ' L' + X(series[i].o) + ' ' + Y(series[i].p25);
-  svg.appendChild(el('path', {d:band+' Z', fill:cssv('--blue'), opacity:.24}));
-  let dm = 'M' + X(series[0].o) + ' ' + Y(series[0].p50);
-  series.forEach(s => dm += ' L' + X(s.o) + ' ' + Y(s.p50));
-  svg.appendChild(el('path', {d:dm, fill:'none', stroke:cssv('--blue'), 'stroke-width':2.5, 'stroke-linejoin':'round'}));
+  const linePath = ser => { let d='M'+X(ser[0].o)+' '+Y(ser[0].p50); ser.forEach(s=>d+=' L'+X(s.o)+' '+Y(s.p50)); return d; };
+  curves.forEach(c => {
+    if (!split){
+      let band = 'M' + X(c.series[0].o) + ' ' + Y(c.series[0].p75);
+      c.series.forEach(s => band += ' L' + X(s.o) + ' ' + Y(s.p75));
+      for (let i=c.series.length-1;i>=0;i--) band += ' L' + X(c.series[i].o) + ' ' + Y(c.series[i].p25);
+      svg.appendChild(el('path', {d:band+' Z', fill:c.color, opacity:.24}));
+    }
+    svg.appendChild(el('path', {d:linePath(c.series), fill:'none', stroke:c.color,
+      'stroke-width':2.5, 'stroke-linejoin':'round'}));
+  });
 
   // hover
   const cross = el('line', {y1:mT, y2:mT+ih, stroke:cssv('--axis'), 'stroke-width':1, opacity:0});
-  const dot = el('circle', {r:4, fill:cssv('--blue'), stroke:cssv('--surface'), 'stroke-width':2, opacity:0});
-  svg.appendChild(cross); svg.appendChild(dot);
+  svg.appendChild(cross);
   const hit = el('rect', {x:mL, y:mT, width:iw, height:ih, fill:'transparent'});
   hit.style.cursor = 'crosshair';
   hit.addEventListener('pointermove', e => {
     const r = svg.getBoundingClientRect();
     const o = oMin + ((e.clientX-r.left)/r.width*W - mL)/iw*(oMax-oMin);
-    let best = series[0]; for (const s of series) if (Math.abs(s.o-o) < Math.abs(best.o-o)) best = s;
+    const ref = curves[0].series;
+    let best = ref[0]; for (const s of ref) if (Math.abs(s.o-o) < Math.abs(best.o-o)) best = s;
     cross.setAttribute('x1', X(best.o)); cross.setAttribute('x2', X(best.o)); cross.setAttribute('opacity',1);
-    dot.setAttribute('cx', X(best.o)); dot.setAttribute('cy', Y(best.p50)); dot.setAttribute('opacity',1);
-    const sign = delta && best.p50>0 ? '+' : '';
-    const unit = delta ? ' mmol/L' : ' mmol/L';
-    showTip(e, '<b>' + (best.o>=0?'+':'') + (best.o/60).toFixed(best.o%60?2:0) + ' h</b>'
-      + '<div class="row">Median ' + sign + best.p50.toFixed(1) + unit + '</div>'
-      + '<div class="row">Middle 50%: ' + best.p25.toFixed(1) + ' to ' + best.p75.toFixed(1) + '</div>'
-      + '<div class="row">' + best.n + ' doses w/ data</div>');
+    const hr = (best.o>=0?'+':'') + (best.o/60).toFixed(best.o%60?2:0) + ' h';
+    let rows;
+    if (split){
+      rows = curves.map(c => { const s=c.series.find(x=>x.o===best.o);
+        return s? '<div class="row">'+c.label+': '+(delta&&s.p50>0?'+':'')+s.p50.toFixed(1)+'</div>':''; }).join('');
+    } else {
+      rows = '<div class="row">Median '+(delta&&best.p50>0?'+':'')+best.p50.toFixed(1)+' mmol/L</div>'
+        + '<div class="row">Middle 50%: '+best.p25.toFixed(1)+' to '+best.p75.toFixed(1)+'</div>'
+        + '<div class="row">'+best.n+' doses w/ data</div>';
+    }
+    showTip(e, '<b>'+hr+'</b>'+rows);
   });
-  hit.addEventListener('pointerleave', () => { hideTip(); cross.setAttribute('opacity',0); dot.setAttribute('opacity',0); });
+  hit.addEventListener('pointerleave', () => { hideTip(); cross.setAttribute('opacity',0); });
   svg.appendChild(hit);
   const yt = el('text', {x:13, y:mT+ih/2, 'text-anchor':'middle', transform:'rotate(-90 13 ' + (mT+ih/2) + ')'});
   yt.setAttribute('class','axtitle'); yt.textContent = delta ? 'change from dose (mmol/L)' : 'mmol/L'; svg.appendChild(yt);
 
-  // summary cards
-  const at = m => series.find(s => s.o === m);
+  document.getElementById('resp-legend').innerHTML = split
+    ? curves.map(c => '<span><span class="sw" style="background:'+c.color+'"></span>'
+        + c.label + ' <span style="color:var(--muted)">n=' + c.sub.length + '</span></span>').join('')
+    : '';
+
+  const ser = curves[0].series;
+  const at = m => ser.find(s => s.o === m);
   const g0med = quant(subset.map(d => d.g0), 0.5);
-  const s180 = at(180), s120 = at(120);
   const chgTxt = s => s == null ? '–' : (delta ? (s.p50>0?'+':'') + s.p50.toFixed(1) : s.p50.toFixed(1));
-  const cards = [
-    ['Doses', subset.length + ''],
-    ['Median start', g0med==null?'–':g0med.toFixed(1) + ' mmol/L'],
-    [delta?'Change @2h':'Median @2h', chgTxt(s120)],
-    [delta?'Change @3h':'Median @3h', chgTxt(s180)],
-  ];
+  const cards = split ? [['Doses', subset.length+''], ['Median start', g0med==null?'–':g0med.toFixed(1)]]
+    : [['Doses', subset.length+''], ['Median start', g0med==null?'–':g0med.toFixed(1)+' mmol/L'],
+       [delta?'Change @2h':'Median @2h', chgTxt(at(120))], [delta?'Change @3h':'Median @3h', chgTxt(at(180))]];
   document.getElementById('resp-summary').innerHTML = cards.map(([l,v]) =>
     '<div class="card"><b>' + v + '</b>' + l + '</div>').join('');
+
+  renderScatter(subset);
 }
 
-function renderAll(){ renderTIR(); renderAGP(); renderResponse(); renderTrace(); }
+// ---- Correction-factor scatter: units vs drop by +3h ----
+function renderScatter(subset){
+  const i180 = DATA.response.offsets.indexOf(180);
+  const pts = [];
+  subset.forEach(d => { const g = d.r[i180]; if (g != null) pts.push({u:d.u, drop:+(d.g0 - g).toFixed(1)}); });
+  const svg = document.getElementById('scatter');
+  svg.innerHTML = '';
+  const W = 900, H = 260, mL = 44, mR = 12, mT = 14, mB = 34;
+  const iw = W - mL - mR, ih = H - mT - mB;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  if (pts.length < 3){
+    const t = el('text', {x:W/2, y:H/2, 'text-anchor':'middle', fill:cssv('--muted'), 'font-size':13});
+    t.textContent = 'Not enough doses with a +3 h reading'; svg.appendChild(t);
+    document.getElementById('scatter-summary').innerHTML = ''; return;
+  }
+  // cap x at the 90th pct of units so a few big outliers don't crush the cluster
+  const us = pts.map(p => p.u).sort((a,b)=>a-b);
+  const p90 = us[Math.floor((us.length-1)*0.9)];
+  const uMax = Math.max(10, Math.min(us[us.length-1], p90 + 2));
+  const shown = pts.filter(p => p.u <= uMax);
+  const off = pts.length - shown.length;
+  let dLo = Math.min(0, ...shown.map(p => p.drop)), dHi = Math.max(0, ...shown.map(p => p.drop));
+  const dp = Math.max(1,(dHi-dLo)*0.08); dLo -= dp; dHi += dp;
+  const X = u => mL + u/uMax*iw;
+  const Y = v => mT + (1 - (v-dLo)/(dHi-dLo))*ih;
+
+  // zero line
+  svg.appendChild(el('line', {x1:mL, y1:Y(0), x2:mL+iw, y2:Y(0), stroke:cssv('--axis'), 'stroke-width':1.5}));
+  // y ticks
+  const step = (dHi-dLo)>12?4:2;
+  for (let v=Math.ceil(dLo/step)*step; v<=dHi; v+=step){
+    svg.appendChild(el('line', {x1:mL, y1:Y(v), x2:mL+iw, y2:Y(v), stroke:cssv('--grid'), 'stroke-width':1}));
+    const t = el('text', {x:mL-8, y:Y(v), 'text-anchor':'end', 'dominant-baseline':'middle'});
+    t.setAttribute('class','tick'); t.textContent = (v>0?'+':'')+v; svg.appendChild(t);
+  }
+  for (let u=0; u<=uMax; u+=Math.ceil(uMax/8)){
+    const t = el('text', {x:X(u), y:H-10, 'text-anchor':'middle'});
+    t.setAttribute('class','tick'); t.textContent = u; svg.appendChild(t);
+  }
+  // least-squares fit over the shown (non-outlier) doses
+  const n = shown.length, sx = shown.reduce((a,p)=>a+p.u,0), sy = shown.reduce((a,p)=>a+p.drop,0);
+  const sxx = shown.reduce((a,p)=>a+p.u*p.u,0), sxy = shown.reduce((a,p)=>a+p.u*p.drop,0);
+  const syy = shown.reduce((a,p)=>a+p.drop*p.drop,0);
+  const denom = n*sxx - sx*sx;
+  const b = denom ? (n*sxy - sx*sy)/denom : 0;
+  const a = (sy - b*sx)/n;
+  const r = Math.sqrt(Math.max(0,(n*sxy-sx*sy)*(n*sxy-sx*sy)/(denom*(n*syy-sy*sy)||1)));
+  // points (deterministic jitter so integer units don't stack)
+  shown.forEach((p,idx) => {
+    const jx = ((idx*37)%11 - 5)*0.03;
+    svg.appendChild(el('circle', {cx:X(p.u+jx), cy:Y(p.drop), r:3.4, fill:cssv('--blue'),
+      opacity:.5, stroke:cssv('--surface'), 'stroke-width':.5}));
+  });
+  if (off > 0){
+    const t = el('text', {x:mL+iw, y:mT+2, 'text-anchor':'end', fill:cssv('--muted'), 'font-size':10.5});
+    t.textContent = off + ' dose' + (off>1?'s':'') + ' > ' + uMax + ' U off-scale';
+    svg.appendChild(t);
+  }
+  // fit line
+  svg.appendChild(el('line', {x1:X(0), y1:Y(a), x2:X(uMax), y2:Y(a+b*uMax),
+    stroke:cssv('--fast'), 'stroke-width':2.5}));
+  const yt = el('text', {x:13, y:mT+ih/2, 'text-anchor':'middle', transform:'rotate(-90 13 ' + (mT+ih/2) + ')'});
+  yt.setAttribute('class','axtitle'); yt.textContent = 'drop by 3 h (mmol/L)'; svg.appendChild(yt);
+  const xt = el('text', {x:mL+iw/2, y:H-1, 'text-anchor':'middle'});
+  xt.setAttribute('class','axtitle'); xt.textContent = 'dose (units)'; svg.appendChild(xt);
+
+  document.getElementById('scatter-summary').innerHTML = [
+    ['Doses fitted', n+''],
+    ['Drop / unit', b.toFixed(2) + ' mmol/U'],
+    ['Fit r', r.toFixed(2)],
+  ].map(([l,v]) => '<div class="card"><b>' + v + '</b>' + l + '</div>').join('');
+}
+
+// ---- Overnight & dawn (reuses the AGP percentile bins, 00:00–09:00) ----
+function renderOvernight(){
+  const A = DATA.agp.filter(d => d.t <= 540 && d.p50 != null);
+  const svg = document.getElementById('overnight');
+  svg.innerHTML = '';
+  const W = 900, H = 260, mL = 44, mR = 12, mT = 12, mB = 28;
+  const iw = W - mL - mR, ih = H - mT - mB;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  const tMax = 540, yMin = 2, yMax = 18;
+  const X = t => mL + t/tMax*iw;
+  const Y = v => mT + (1 - (Math.min(yMax,Math.max(yMin,v))-yMin)/(yMax-yMin))*ih;
+
+  svg.appendChild(el('rect', {x:mL, y:Y(10), width:iw, height:Y(3.9)-Y(10), fill:cssv('--inrange'), opacity:0.10}));
+  [3.9,10].forEach(v => svg.appendChild(el('line', {x1:mL, y1:Y(v), x2:mL+iw, y2:Y(v),
+    stroke:cssv('--inrange'), 'stroke-width':1, 'stroke-dasharray':'4 4', opacity:.5})));
+  [2,6,10,14,18].forEach(v => {
+    svg.appendChild(el('line', {x1:mL, y1:Y(v), x2:mL+iw, y2:Y(v), stroke:cssv('--grid'), 'stroke-width':1}));
+    const t = el('text', {x:mL-8, y:Y(v), 'text-anchor':'end', 'dominant-baseline':'middle'});
+    t.setAttribute('class','tick'); t.textContent = v; svg.appendChild(t);
+  });
+  for (let h=0; h<=9; h+=3){
+    const t = el('text', {x:X(h*60), y:H-8, 'text-anchor':'middle'});
+    t.setAttribute('class','tick'); t.textContent = (h<10?'0':'')+h+':00'; svg.appendChild(t);
+  }
+  let band = 'M' + X(A[0].t) + ' ' + Y(A[0].p75);
+  A.forEach(p => band += ' L' + X(p.t) + ' ' + Y(p.p75));
+  for (let i=A.length-1;i>=0;i--) band += ' L' + X(A[i].t) + ' ' + Y(A[i].p25);
+  svg.appendChild(el('path', {d:band+' Z', fill:cssv('--blue'), opacity:.24}));
+  let dm = 'M' + X(A[0].t) + ' ' + Y(A[0].p50);
+  A.forEach(p => dm += ' L' + X(p.t) + ' ' + Y(p.p50));
+  svg.appendChild(el('path', {d:dm, fill:'none', stroke:cssv('--blue'), 'stroke-width':2.5, 'stroke-linejoin':'round'}));
+
+  const cross = el('line', {y1:mT, y2:mT+ih, stroke:cssv('--axis'), 'stroke-width':1, opacity:0});
+  svg.appendChild(cross);
+  const hit = el('rect', {x:mL, y:mT, width:iw, height:ih, fill:'transparent'});
+  hit.style.cursor = 'crosshair';
+  hit.addEventListener('pointermove', e => {
+    const r = svg.getBoundingClientRect();
+    const t = ((e.clientX-r.left)/r.width*W - mL)/iw*tMax;
+    let best = A[0]; for (const p of A) if (Math.abs(p.t-t) < Math.abs(best.t-t)) best = p;
+    cross.setAttribute('x1', X(best.t)); cross.setAttribute('x2', X(best.t)); cross.setAttribute('opacity',1);
+    const hh = Math.floor(best.t/60), mm = best.t%60;
+    showTip(e, '<b>'+(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm+'</b>'
+      + '<div class="row">Median '+best.p50.toFixed(1)+'</div>'
+      + '<div class="row">IQR '+best.p25.toFixed(1)+'–'+best.p75.toFixed(1)+'</div>');
+  });
+  hit.addEventListener('pointerleave', () => { hideTip(); cross.setAttribute('opacity',0); });
+  svg.appendChild(hit);
+
+  const at = m => A.find(d => d.t === m);
+  const a3 = at(180), a7 = at(420);
+  const rise = (a3 && a7) ? (a7.p50 - a3.p50) : null;
+  document.getElementById('overnight-summary').innerHTML = [
+    ['Median 3am', a3? a3.p50.toFixed(1)+' mmol/L':'–'],
+    ['Median 7am', a7? a7.p50.toFixed(1)+' mmol/L':'–'],
+    ['Dawn rise 3→7am', rise==null?'–':(rise>0?'+':'')+rise.toFixed(1)+' mmol/L'],
+  ].map(([l,v]) => '<div class="card"><b>' + v + '</b>' + l + '</div>').join('');
+}
+
+// ---- Day explorer ----
+const DAY_DATES = Object.keys(DATA.dayDetail).sort();
+let dayIdx = DAY_DATES.length - 1;
+function buildDaySelector(){
+  const sel = document.getElementById('day-select');
+  sel.innerHTML = DAY_DATES.map((d,i) =>
+    '<option value="'+i+'">' + new Date(d+'T00:00:00').toLocaleDateString(undefined,
+      {weekday:'short', month:'short', day:'numeric'}) + '</option>').join('');
+  sel.value = dayIdx;
+  sel.onchange = () => { dayIdx = +sel.value; renderDay(); };
+  document.getElementById('day-prev').onclick = () => { if (dayIdx>0){ dayIdx--; sel.value=dayIdx; renderDay(); } };
+  document.getElementById('day-next').onclick = () => { if (dayIdx<DAY_DATES.length-1){ dayIdx++; sel.value=dayIdx; renderDay(); } };
+}
+function renderDay(){
+  const date = DAY_DATES[dayIdx];
+  const rec = DATA.dayDetail[date];
+  const svg = document.getElementById('day');
+  svg.innerHTML = '';
+  const W = 900, H = 300, mL = 40, mR = 12, mT = 14, mB = 40;
+  const iw = W - mL - mR, ih = H - mT - mB;
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  const yMin = 2, yMax = 21, DAY = 86400;
+  const X = s => mL + s/DAY*iw;
+  const Y = v => mT + (1 - (Math.min(yMax,Math.max(yMin,v))-yMin)/(yMax-yMin))*ih;
+
+  svg.appendChild(el('rect', {x:mL, y:Y(10), width:iw, height:Y(3.9)-Y(10), fill:cssv('--inrange'), opacity:0.10}));
+  [3.9,10].forEach(v => svg.appendChild(el('line', {x1:mL, y1:Y(v), x2:mL+iw, y2:Y(v),
+    stroke:cssv('--inrange'), 'stroke-width':1, 'stroke-dasharray':'4 4', opacity:.5})));
+  [2,6,10,14,18].forEach(v => {
+    svg.appendChild(el('line', {x1:mL, y1:Y(v), x2:mL+iw, y2:Y(v), stroke:cssv('--grid'), 'stroke-width':1}));
+    const t = el('text', {x:mL-8, y:Y(v), 'text-anchor':'end', 'dominant-baseline':'middle'});
+    t.setAttribute('class','tick'); t.textContent = v; svg.appendChild(t);
+  });
+  for (let h=0; h<=24; h+=3){
+    const x = X(h*3600);
+    svg.appendChild(el('line', {x1:x, y1:mT, x2:x, y2:mT+ih, stroke:cssv('--grid'), 'stroke-width':1}));
+    const t = el('text', {x:x, y:H-22, 'text-anchor':'middle'});
+    t.setAttribute('class','tick'); t.textContent = (h<10?'0':'')+h+':00'; svg.appendChild(t);
+  }
+  // glucose line, break gaps > 30 min
+  let d = '', prev = null;
+  rec.g.forEach(([s,v]) => { d += (prev===null || s-prev>1800 ? ' M':' L') + X(s) + ' ' + Y(v); prev = s; });
+  if (d) svg.appendChild(el('path', {d, fill:'none', stroke:cssv('--blue'), 'stroke-width':1.8,
+    'stroke-linejoin':'round', 'stroke-linecap':'round'}));
+  // doses
+  const baseY = mT + ih;
+  rec.ins.forEach(([s,u,typ]) => {
+    const x = X(s), c = typ==='fast'? cssv('--fast'):cssv('--slow');
+    const h = Math.min(52, 10 + u*2.4);
+    svg.appendChild(el('line', {x1:x, y1:baseY, x2:x, y2:baseY-h, stroke:c, 'stroke-width':2}));
+    svg.appendChild(el('circle', {cx:x, cy:baseY-h, r:5, fill:c, stroke:cssv('--surface'), 'stroke-width':1.5}));
+    const lab = el('text', {x:x, y:baseY-h-7, 'text-anchor':'middle', fill:c, 'font-size':11, 'font-weight':650});
+    lab.textContent = u; svg.appendChild(lab);
+  });
+
+  const gv = rec.g.map(p => p[1]);
+  const mean = gv.length ? gv.reduce((a,b)=>a+b,0)/gv.length : null;
+  const tir = gv.length ? 100*gv.filter(v=>v>=3.9&&v<=10).length/gv.length : null;
+  const fast = rec.ins.filter(i=>i[2]==='fast').reduce((a,i)=>a+i[1],0);
+  const slow = rec.ins.filter(i=>i[2]!=='fast').reduce((a,i)=>a+i[1],0);
+  document.getElementById('day-summary').innerHTML = [
+    ['Mean', mean==null?'–':mean.toFixed(1)+' mmol/L'],
+    ['In range', tir==null?'–':Math.round(tir)+'%'],
+    ['Fast', fast+' U'], ['Slow', slow+' U'],
+  ].map(([l,v]) => '<div class="card"><b>' + v + '</b>' + l + '</div>').join('');
+}
+
+function renderAll(){ renderTIR(); renderAGP(); renderResponse(); renderOvernight(); renderDay(); renderTrace(); }
 buildRespFilters();
+buildDaySelector();
 renderAll();
 renderTable();
 addEventListener('resize', () => { /* SVGs are responsive via viewBox */ });

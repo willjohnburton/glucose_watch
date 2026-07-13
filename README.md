@@ -358,9 +358,21 @@ the next 4 hours (with the 25–75% spread), filterable by dose type, the glucos
 you *started* at, and time of day, in absolute or change-from-dose mode. Splitting
 by starting glucose separates the two regimes — doses started high trace the real
 correction response (how far/fast insulin brings you down), while doses started in
-range trace meal boluses (glucose rises as food outpaces the dose). It is
-exploratory, not dosing advice; the insulin log doesn't tag meal vs correction, so
-starting-glucose is the proxy.
+range trace meal boluses (glucose rises as food outpaces the dose). The insulin log
+doesn't tag meal vs correction, so starting-glucose is the proxy.
+
+Four analyses hang off this:
+
+- **Split by dose size** — overlays median response curves for 1–3 / 4–6 / 7+ U
+  buckets, to see whether bigger doses behave proportionally.
+- **Drop per unit** — a scatter of units given vs. glucose fall by 3 h, with a
+  least-squares fit whose slope is the effective mmol/L per unit (filter to
+  *High >10* to isolate corrections). The x-axis is capped at the 90th-percentile
+  dose; larger outliers are counted off-scale rather than crushing the cluster.
+- **Overnight & dawn** — midnight–9am glucose folded across every night (median +
+  IQR + target), with cards for the median 3am→7am dawn change.
+- **Day explorer** — step through any single day's full glucose curve with its
+  doses (unit-labelled) and that day's mean / TIR / units.
 
 By default it writes into **iCloud Drive**, so the same file opens on macOS
 (double-click) and iOS (Files app → iCloud Drive → Health → tap it). The data
