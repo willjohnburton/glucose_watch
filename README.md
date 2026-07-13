@@ -338,6 +338,31 @@ python3 tools/export-glucose.py          # merges all sensors → ~/glucose-hist
 sensor`. The parse is validated against this app's own insulin-log snapshots
 (mean error ~0.14 mmol).
 
+## Dashboard
+
+`tools/build-dashboard.py` turns the two CSVs into a **single self-contained
+HTML file** — no server, no database, no CDN (data and charts are inlined, so it
+works fully offline). It computes the standard clinical summaries a diabetes
+clinic expects (Time-in-Range, an AGP percentile profile, GMI, CV) plus a recent
+14-day trace with insulin doses overlaid, and a per-day table.
+
+```bash
+# refresh the CSVs first (see the two sections above), then:
+python3 tools/build-dashboard.py
+# → ~/Library/Mobile Documents/com~apple~CloudDocs/Health/glucose-dashboard.html
+```
+
+By default it writes into **iCloud Drive**, so the same file opens on macOS
+(double-click) and iOS (Files app → iCloud Drive → Health → tap it). The data
+never leaves your Apple account — nothing is hosted. Override paths with
+`--glucose`, `--insulin`, `--out`. The page is theme-aware (light/dark) with a
+manual toggle, and every chart has hover/tap tooltips.
+
+Regenerate whenever you want fresh numbers (e.g. before a doctor's appointment);
+it's a snapshot, keyed off the glucose CSV's modification date for the "generated"
+stamp. The generated HTML embeds personal health data and is intentionally **not**
+committed — only the generator script lives here.
+
 ## Troubleshooting
 
 **Watch face shows `--` forever after Juggluco install.** Samsung One UI's
