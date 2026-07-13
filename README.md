@@ -286,6 +286,30 @@ CSV columns:
 | `glucose_mmol` | glucose at the moment of the tap (nullable) |
 | `trend` | trend enum name (`Stable`, `Rising`, etc.; nullable) |
 
+## Glucose history: exporting from Juggluco
+
+This app never persists glucose — the watch face reads a live broadcast, and the
+only glucose it stores is the single snapshot saved with each insulin log (the
+`glucose_mmol` column above). The full minute-by-minute history lives inside
+**Juggluco** (`tk.glucodata`), which runs no HTTP server on Wear OS.
+
+Juggluco keeps each sensor's readings in `files/sensors/<id>/polls.dat` as 20-byte
+little-endian records — `int32 timestamp, int32 counter, int32 glucose (mg/dL),
+int32 trend, float rate`. On the Galaxy Watch 4, `adb run-as tk.glucodata` can read
+these (unusual for a release app — if a future build blocks it, fall back to
+Juggluco's own in-app export). Two scripts turn that into one CSV:
+
+```bash
+export ANDROID_SERIAL=10.0.0.48:<port>   # only if several devices are attached
+./tools/pull-juggluco.sh                 # copies raw data → ~/juggluco-data
+python3 tools/export-glucose.py          # merges all sensors → ~/glucose-history.csv
+```
+
+`export-glucose.py` dedupes overlapping sensors by timestamp and emits columns
+`timestamp_local, epoch_s, glucose_mmol, glucose_mgdl, trend, rate_mgdl_min,
+sensor`. The parse is validated against this app's own insulin-log snapshots
+(mean error ~0.14 mmol).
+
 ## Troubleshooting
 
 **Watch face shows `--` forever after Juggluco install.** Samsung One UI's
