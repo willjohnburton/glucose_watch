@@ -274,6 +274,10 @@ If `sqlite3` is not on PATH it falls back to dropping the raw `.db` file
 beside the requested output path — open it with [DB Browser for
 SQLite](https://sqlitebrowser.org/) on the desktop.
 
+From DB v3 onward the same run also writes a `<name>-glucose.csv` beside the
+insulin CSV whenever the `glucose_entries` table exists (see *Glucose history*
+below).
+
 CSV columns:
 
 | column | meaning |
@@ -286,18 +290,42 @@ CSV columns:
 | `glucose_mmol` | glucose at the moment of the tap (nullable) |
 | `trend` | trend enum name (`Stable`, `Rising`, etc.; nullable) |
 
-## Glucose history: exporting from Juggluco
+## Glucose history
 
-This app never persists glucose — the watch face reads a live broadcast, and the
-only glucose it stores is the single snapshot saved with each insulin log (the
-`glucose_mmol` column above). The full minute-by-minute history lives inside
-**Juggluco** (`tk.glucodata`), which runs no HTTP server on Wear OS.
+There are two ways glucose ends up on your desktop, and you'll usually want both:
+the app records everything from now on, and Juggluco holds the back-history from
+before the app started recording.
 
-Juggluco keeps each sensor's readings in `files/sensors/<id>/polls.dat` as 20-byte
-little-endian records — `int32 timestamp, int32 counter, int32 glucose (mg/dL),
-int32 trend, float rate`. On the Galaxy Watch 4, `adb run-as tk.glucodata` can read
-these (unusual for a release app — if a future build blocks it, fall back to
-Juggluco's own in-app export). Two scripts turn that into one CSV:
+### Ongoing: persisted by the app (DB v3+)
+
+`JugglucoBroadcastReceiver` already receives every reading (~1/min); from DB v3
+the app also writes each one to the `glucose_entries` table in `bg.db`, keyed by
+epoch minute so repeated same-minute broadcasts collapse to one row. No sensor-
+change trigger and no cloud — it just accumulates. `tools/export-log.sh` dumps it
+alongside the insulin CSV:
+
+```bash
+./tools/export-log.sh ~/Desktop/bg.csv   # → bg.csv (insulin) + bg-glucose.csv
+```
+
+Glucose CSV columns: `epoch_s, logged_at_local, glucose_mmol, glucose_mgdl,
+trend`.
+
+Caveat: the broadcast receiver is registered at runtime (in `BgApplication`), so
+readings are only captured while the app process is alive. Samsung's battery
+management can freeze it — the same *Unrestricted* battery setting the watch face
+needs (see Troubleshooting) keeps this recording too. For a gap-free record,
+periodically back-fill from Juggluco (below), which stores every reading itself.
+
+### Back-history: from Juggluco's raw files
+
+The full minute-by-minute history predating the app's own recording lives inside
+**Juggluco** (`tk.glucodata`), which runs no HTTP server on Wear OS. It keeps each
+sensor's readings in `files/sensors/<id>/polls.dat` as 20-byte little-endian
+records — `int32 timestamp, int32 counter, int32 glucose (mg/dL), int32 trend,
+float rate`. On the Galaxy Watch 4, `adb run-as tk.glucodata` can read these
+(unusual for a release app — if a future build blocks it, fall back to Juggluco's
+own in-app export). Two scripts turn that into one CSV:
 
 ```bash
 export ANDROID_SERIAL=10.0.0.48:<port>   # only if several devices are attached

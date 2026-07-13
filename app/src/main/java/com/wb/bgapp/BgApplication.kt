@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.IntentFilter
 import android.os.Build
+import com.wb.bgapp.data.AppDatabase
 import com.wb.bgapp.data.GlucoseRepository
 import com.wb.bgapp.data.JugglucoBroadcastReceiver
 import com.wb.bgapp.data.JugglucoHttpProvider
@@ -19,6 +20,8 @@ class BgApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        GlucoseRepository.attachStore(AppDatabase.get(this).glucoseDao())
 
         if (isEmulator()) {
             GlucoseRepository.bind(MockGlucoseProvider(appScope))

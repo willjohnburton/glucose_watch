@@ -55,3 +55,24 @@ SQL
 ROWS=$(wc -l < "$OUT" | tr -d ' ')
 ROWS=$((ROWS - 1))  # minus header
 echo "Wrote ${ROWS} entries to $OUT"
+
+# Glucose is persisted from v3 onward (glucose_entries, keyed by epoch minute).
+# If the table exists, dump it alongside the insulin CSV as <name>-glucose.csv.
+if "$SQLITE" "$TMP_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='glucose_entries';" | grep -q glucose_entries; then
+    GOUT="${OUT%.csv}-glucose.csv"
+    "$SQLITE" "$TMP_DB" <<SQL > "$GOUT"
+.mode csv
+.headers on
+SELECT
+  minuteEpoch * 60 AS epoch_s,
+  datetime(minuteEpoch * 60, 'unixepoch', 'localtime') AS logged_at_local,
+  ROUND(mmol, 2) AS glucose_mmol,
+  CAST(ROUND(mmol * 18.0, 0) AS INT) AS glucose_mgdl,
+  trend
+FROM glucose_entries
+ORDER BY minuteEpoch;
+SQL
+    GROWS=$(wc -l < "$GOUT" | tr -d ' ')
+    GROWS=$((GROWS - 1))
+    echo "Wrote ${GROWS} glucose readings to $GOUT"
+fi
