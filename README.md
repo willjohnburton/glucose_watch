@@ -352,6 +352,18 @@ python3 tools/build-dashboard.py
 # → ~/Library/Mobile Documents/com~apple~CloudDocs/Health/glucose-dashboard.html
 ```
 
+**One command for the whole thing.** `tools/refresh.sh` reconnects to the watch,
+pulls glucose + insulin, and rebuilds the dashboard in one go — the normal way to
+refresh before an appointment:
+
+```bash
+./tools/refresh.sh 10.0.0.48:46421   # or run with no args to be prompted
+```
+
+Get the IP:port from the watch's **Wireless debugging** screen (it changes each
+session; pairing is one-time). The watch only needs WiFi on for the pull — it
+records glucose and insulin locally with WiFi off the rest of the time.
+
 The **Insulin → glucose response** section is the analytical core: it lines every
 dose up at the moment of injection (t=0) and plots the median glucose path over
 the next 4 hours (with the 25–75% spread), filterable by dose type, the glucose
