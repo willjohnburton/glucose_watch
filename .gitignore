@@ -12,3 +12,4 @@
 *.aab
 *.keystore
 /release
+/.claude/session-routine.txt
