@@ -390,6 +390,38 @@ Get the IP:port from the watch's **Wireless debugging** screen (it changes each
 session; pairing is one-time). The watch only needs WiFi on for the pull — it
 records glucose and insulin locally with WiFi off the rest of the time.
 
+### Showing it on an iPad: the static build
+
+"Self-contained" isn't the same as "needs no scripting". The numbers and charts
+are drawn by JavaScript from the inlined dataset, so of the ~340 KB file only
+about 10 KB is markup — and anywhere scripting is unavailable the page renders
+as correct headings and captions wrapped around empty cards. That includes iOS
+Quick Look, which is what opens an `.html` tapped in the Files app, so it is
+exactly the path an iPad takes to iCloud Drive.
+
+`tools/freeze-dashboard.py` renders the page once in headless Chrome, serialises
+the drawn DOM and discards the scripts. The charts are `viewBox` SVG with no
+fixed pixel widths, so they survive as responsive static images.
+
+```bash
+python3 tools/freeze-dashboard.py
+# → .../Health/glucose-dashboard-static.html   (~107 KB, zero <script> tags)
+```
+
+Interactivity is what's lost. Instead of leaving dead buttons on the page, each
+filter group collapses to whichever chip was active — so a chart still says it
+covers fast doses started above 10 — and the day picker becomes a plain label.
+Keep both files in the Health folder: the interactive one when the viewer runs
+scripts, the static one when it doesn't.
+
+For a print-ready copy, headless Chrome will also write a PDF:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless \
+  --print-to-pdf="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Health/glucose-dashboard.pdf" \
+  --no-pdf-header-footer "file://$HOME/Library/Mobile Documents/com~apple~CloudDocs/Health/glucose-dashboard.html"
+```
+
 The **Insulin → glucose response** section is the analytical core: it lines every
 dose up at the moment of injection (t=0) and plots the median glucose path over
 the next 4 hours (with the 25–75% spread), filterable by dose type, the glucose
