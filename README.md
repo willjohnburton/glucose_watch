@@ -338,6 +338,32 @@ python3 tools/export-glucose.py          # merges all sensors → ~/glucose-hist
 sensor`. The parse is validated against this app's own insulin-log snapshots
 (mean error ~0.14 mmol).
 
+### Rescue path: the 15-minute NFC history
+
+`polls.dat` only fills when the sensor's BLE stream is working. When it isn't —
+see the entitlement case under Troubleshooting — Juggluco still writes
+`files/sensors/<id>/data.dat` from NFC scans, because the Libre sensor keeps
+about eight hours of 15-minute history in its own memory and hands it over on
+every scan. `data.dat` is a flat array of 12-byte little-endian records:
+`uint32 timestamp, uint16 counter, uint16 raw, uint16 glucose (tenths of mg/dL),
+uint16 flags`, first record at offset 12, unwritten slots zeroed.
+
+```bash
+python3 tools/export-nfc-history.py ~/juggluco-data --out ~/glucose-nfc15.csv
+python3 tools/merge-nfc-history.py --nfc ~/glucose-nfc15.csv
+```
+
+`merge-nfc-history.py` keeps a 15-minute reading only when no 1-minute reading
+sits within ±7 minutes of it. Appending the lot would count already-covered
+periods twice and skew time-in-range towards whenever the sensor happened to be
+scanned. `pull-juggluco.sh` copies `data.dat` and `current.dat` alongside
+`polls.dat` so the rescue path is available from any pull.
+
+The tenths-of-mg/dL field was confirmed against a sensor holding both files,
+agreeing with `polls.dat` to within a few mg/dL — the residual being the offset
+between the 15-minute slot and the nearest 1-minute sample. Note this was a
+six-point check; treat recovered values as indicative rather than exact.
+
 ## Dashboard
 
 `tools/build-dashboard.py` turns the two CSVs into a **single self-contained
@@ -409,6 +435,28 @@ committed — only the generator script lives here.
 Freecess controller freezes background apps. Open **Settings → Apps →
 Juggluco → Battery** on the watch and set it to *Unrestricted* (wording
 varies; also worth removing Juggluco from any "sleeping apps" list).
+
+**A new sensor never produces a reading, but the old one was fine.** Libre 3
+hands its BLE streaming credentials to whichever app performs the *activation*
+scan, and only one device holds the connection at a time. If the official Libre
+app (on a phone, iOS included) activated the sensor, Juggluco on the watch can
+NFC-read it but will never be entitled to the stream — and this is not
+recoverable for that sensor. The tell-tale signature, all three together:
+
+- `files/sensors/<new-id>/polls.dat` exists at full size but is **entirely
+  zero-filled** — Juggluco preallocated it and never wrote a record. Check with
+  `adb shell "run-as tk.glucodata cat files/sensors/<id>/polls.dat" | xxd | head`.
+- The sensor's other files have an mtime ~60 minutes after `state.lnk` — Juggluco
+  tracked the warmup timer, then went quiet.
+- `dumpsys bluetooth_manager` shows **no sensor in "Bonded devices"** and an
+  empty GATT client map, while Bluetooth is on and Juggluco is running.
+
+Distinguishing it from the Freecess case above: here Juggluco is alive and
+unrestricted (`adb shell am get-standby-bucket tk.glucodata` returns 10), so the
+problem is entitlement, not scheduling. **Prevention — the scan order matters:**
+apply the sensor, make the *first* scan Juggluco on the watch, and don't scan it
+with any other app or device afterwards (a second Juggluco instance on a phone
+can steal the link even after a correct activation).
 
 **`BgReceiver received action=… no recognised glucose key`.** A new Juggluco
 build introduced new extras keys. Read the `keys=...` list from the log and

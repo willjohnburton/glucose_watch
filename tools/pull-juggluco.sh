@@ -32,7 +32,10 @@ for f in settings.dat sensors.dat backup.dat meals.dat; do
     adb exec-out "run-as $PKG cat files/$f" > "$DEST/$f" 2>/dev/null || true
 done
 
-# each sensor's polls.dat holds the actual per-minute readings
+# Each sensor's polls.dat holds the actual per-minute readings. data.dat holds
+# the 15-minute history Juggluco gets from NFC scans — the only record that
+# survives when a sensor never established its BLE link, so it's worth having
+# even though polls.dat is the primary source (see export-nfc-history.py).
 SENSORS=$(adb shell "run-as $PKG ls files/sensors" | tr -d '\r' | grep -v '\.dat$' || true)
 n=0
 for s in $SENSORS; do
@@ -41,6 +44,9 @@ for s in $SENSORS; do
         echo "pulled sensor $s"
         n=$((n+1))
     fi
+    for f in data.dat current.dat; do
+        adb exec-out "run-as $PKG cat files/sensors/$s/$f" > "$DEST/sensors/$s/$f" 2>/dev/null || true
+    done
 done
 
 echo "Pulled $n sensor(s) to $DEST"
