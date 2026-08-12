@@ -404,15 +404,29 @@ the drawn DOM and discards the scripts. The charts are `viewBox` SVG with no
 fixed pixel widths, so they survive as responsive static images.
 
 ```bash
-python3 tools/freeze-dashboard.py
-# → .../Health/glucose-dashboard-static.html   (~107 KB, zero <script> tags)
+python3 tools/freeze-dashboard.py                    # light theme, all days
+python3 tools/freeze-dashboard.py --theme dark --days 30
+# → .../Health/glucose-dashboard-static.html   (~1.2 MB, zero <script> tags)
 ```
 
-Interactivity is what's lost. Instead of leaving dead buttons on the page, each
-filter group collapses to whichever chip was active — so a chart still says it
-covers fast doses started above 10 — and the day picker becomes a plain label.
-Keep both files in the Health folder: the interactive one when the viewer runs
-scripts, the static one when it doesn't.
+`--theme` defaults to **light** and is baked in as `data-theme`, which outranks
+the `prefers-color-scheme` rule — so it stays light on an iPad set to dark mode.
+It has to be applied *before* the redraw, because chart colours are read out of
+CSS custom properties (`cssv('--blue')`) at draw time and baked into the SVG.
+
+**The day explorer still works.** Every day is rendered in turn by driving the
+page's own `<select>`, and each result is captured into its own panel; a hidden
+radio per day plus `<label>`s for the arrows and a date strip then switch
+between them in pure CSS. That's the classic CSS-tabs trick — deliberately not
+`:target` (hijacks the URL and back button) and not `:has()` (needs a newer
+Safari than is safe to assume). The strip wraps rather than scrolls, since
+nothing can auto-scroll it into view without script. This is what takes the file
+from ~100 KB to ~1.2 MB; use `--days` to trade history for size.
+
+The static filters are what's genuinely lost. Rather than leave dead buttons,
+each filter group collapses to whichever chip was active — so a chart still says
+it covers fast doses started above 10. Keep both files in the Health folder: the
+interactive one when the viewer runs scripts, the static one when it doesn't.
 
 For a print-ready copy, headless Chrome will also write a PDF:
 
