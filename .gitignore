@@ -13,3 +13,6 @@
 *.keystore
 /release
 /.claude/session-routine.txt
+
+# Kotlin build session data
+.kotlin/
