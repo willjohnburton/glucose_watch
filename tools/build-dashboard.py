@@ -214,7 +214,7 @@ def build(glucose, insulin):
     start = glucose[0][1].date().isoformat()
     end = glucose[-1][1].date().isoformat()
     span_days = (glucose[-1][1].date() - glucose[0][1].date()).days + 1
-    expected = span_days * 1440  # Libre 3 via Juggluco logs ~1 reading/minute
+    expected = span_days * 1440  # Libre 2 Plus via Juggluco logs ~1 reading/minute
     return {
         "meta": {
             "start": start, "end": end, "days": span_days,

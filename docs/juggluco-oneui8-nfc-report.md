@@ -151,8 +151,16 @@ is unchanged.
 
 Tag reading on One UI 8 Watch is disabled below the level any app can reach. Juggluco cannot
 work around it, and neither can a replacement app. Affected users' realistic options are to
-roll back the watch OS, or to run NFC activation on a phone and accept that the sensor binds
-to that device for its life.
+roll back the watch OS, or to run the NFC scan on an Android phone running Juggluco. On a
+Libre 2 Plus the second option is a workable arrangement rather than a loss: the scan
+derives the BLE session keys, and afterwards the sensor streams BLE to the watch as before,
+so the phone is only needed for the minute or two of the scan at each sensor change. What
+the watch has lost is the ability to perform that scan itself, not the ability to receive
+the stream.
+
+*(Update: an earlier version of this write-up said activation "binds the sensor to that
+device for its life". That is wrong for the Libre 2 Plus — a sensor can be taken over by a
+later scan, and phone-side activation does not stop the watch from streaming.)*
 
 Happy to run further tests on this watch if it would help — I still have the diagnostic
 build and adb set up.

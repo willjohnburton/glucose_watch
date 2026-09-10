@@ -4,7 +4,7 @@
 `polls.dat` holds the 1-minute BLE stream and is what `export-glucose.py` reads.
 When a sensor never establishes its BLE link (e.g. it was activated by a device
 that wasn't listening), `polls.dat` stays zero-filled but `data.dat` still gets
-written from NFC scans: the Libre sensor keeps roughly eight hours of 15-minute
+written from NFC scans: the Libre 2 Plus keeps roughly eight hours of 15-minute
 history in its own memory and hands it over on every scan.
 
 `data.dat` is a flat array of 12-byte little-endian records:

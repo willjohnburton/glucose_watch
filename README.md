@@ -2,8 +2,26 @@
 
 A minimal Wear OS app for Samsung Galaxy Watch 4 Classic 46mm. Shows live
 blood glucose from [Juggluco](https://www.juggluco.nl/) on the watch face and
-provides a one-tap insulin logger. Personal tooling — no cloud, no phone
-companion, no account.
+provides a one-tap insulin logger. Personal tooling — no cloud, no account,
+no phone required day to day.
+
+## Where the phone fits
+
+"No phone day to day" is not "no phone". The sensor is a **FreeStyle Libre 2
+Plus** with a 15-day life, and activating one — or taking over one that another
+app activated — requires an NFC scan from an **Android phone running Juggluco**.
+That scan is a challenge-response with the sensor firmware which derives the BLE
+session keys; no software change can remove it. The watch cannot stand in: Wear
+OS does not expose NFC reader mode to third-party apps (and on this watch One UI
+8 removed tag reading altogether — see `docs/juggluco-oneui8-nfc-report.md`).
+
+Once the sensor is running it streams BLE straight to the watch, and the phone
+can be switched off. So the phone is needed for about **five minutes every 15
+days**, at sensor change, and not otherwise.
+
+**This app never touches NFC, BLE or the Libre protocol.** Juggluco is the only
+data source. It talks to the sensor and decodes it; this app consumes glucose
+values Juggluco has already decoded, and presents them.
 
 ## What it does
 
@@ -42,12 +60,18 @@ companion, no account.
 | Watch | Samsung Galaxy Watch 4 Classic 46mm (and any Wear OS 3+ round) |
 | OS | Wear OS 3 / One UI Watch 4.5 |
 | Glucose source | Juggluco for Wear OS (tested with 10.9.1-wear) |
+| Sensor | FreeStyle Libre 2 Plus, 15-day life |
+| Sensor activation | NFC scan from an Android phone running Juggluco; not possible on the watch |
 | minSdk | 30 |
 | targetSdk | 34 |
 | Language | Kotlin 2.0 |
 | UI toolkit | Jetpack Compose for Wear OS (logger), AndroidX WatchFace (face) |
 
 ## How the glucose pipeline works
+
+Every path below starts from Juggluco, which is the only data source: it owns
+the sensor link (NFC and BLE) and hands out already-decoded glucose values. This
+app never speaks the Libre protocol itself.
 
 A singleton `GlucoseRepository` exposes a `StateFlow<GlucoseReading?>`. The
 watch face renderer and the logger UI both read from it. Three providers can
@@ -136,6 +160,9 @@ entirely to make the app broadcast-only.
   development).
 - For real-device dev: Galaxy Watch 4 with Developer Options enabled and
   Juggluco installed.
+- An Android phone with Juggluco installed. Not needed for development or for
+  daily use, but it is the only device that can run the NFC activation scan at
+  a sensor change (see *Where the phone fits*).
 
 `local.properties` should point at your SDK:
 
@@ -342,11 +369,21 @@ sensor`. The parse is validated against this app's own insulin-log snapshots
 
 `polls.dat` only fills when the sensor's BLE stream is working. When it isn't —
 see the entitlement case under Troubleshooting — Juggluco still writes
-`files/sensors/<id>/data.dat` from NFC scans, because the Libre sensor keeps
+`files/sensors/<id>/data.dat` from NFC scans, because the Libre 2 Plus keeps
 about eight hours of 15-minute history in its own memory and hands it over on
-every scan. `data.dat` is a flat array of 12-byte little-endian records:
-`uint32 timestamp, uint16 counter, uint16 raw, uint16 glucose (tenths of mg/dL),
-uint16 flags`, first record at offset 12, unwritten slots zeroed.
+every scan. Note where those scans happen: the watch has no NFC reader mode, so
+`data.dat` accumulates in **Juggluco on the phone**, and this rescue path means
+pulling from the phone as well as the watch:
+
+```bash
+ANDROID_SERIAL=<phone-serial> ./tools/pull-juggluco.sh ~/juggluco-data-phone
+```
+
+(`run-as` fails on the phone while it is locked — unlock it first.)
+
+`data.dat` is a flat array of 12-byte little-endian records: `uint32 timestamp,
+uint16 counter, uint16 raw, uint16 glucose (tenths of mg/dL), uint16 flags`,
+first record at offset 12, unwritten slots zeroed.
 
 ```bash
 python3 tools/export-nfc-history.py ~/juggluco-data --out ~/glucose-nfc15.csv
@@ -482,12 +519,12 @@ Freecess controller freezes background apps. Open **Settings → Apps →
 Juggluco → Battery** on the watch and set it to *Unrestricted* (wording
 varies; also worth removing Juggluco from any "sleeping apps" list).
 
-**A new sensor never produces a reading, but the old one was fine.** Libre 3
-hands its BLE streaming credentials to whichever app performs the *activation*
-scan, and only one device holds the connection at a time. If the official Libre
-app (on a phone, iOS included) activated the sensor, Juggluco on the watch can
-NFC-read it but will never be entitled to the stream — and this is not
-recoverable for that sensor. The tell-tale signature, all three together:
+**A new sensor never produces a reading, but the old one was fine.** The BLE
+session keys are derived by the NFC challenge-response at activation, so the app
+that performed that scan is the one entitled to the stream, and only one device
+holds the connection at a time. If the official Libre app (on a phone, iOS
+included) activated the sensor, Juggluco is not entitled to the stream until it
+scans the sensor itself. The tell-tale signature, all three together:
 
 - `files/sensors/<new-id>/polls.dat` exists at full size but is **entirely
   zero-filled** — Juggluco preallocated it and never wrote a record. Check with
@@ -499,10 +536,16 @@ recoverable for that sensor. The tell-tale signature, all three together:
 
 Distinguishing it from the Freecess case above: here Juggluco is alive and
 unrestricted (`adb shell am get-standby-bucket tk.glucodata` returns 10), so the
-problem is entitlement, not scheduling. **Prevention — the scan order matters:**
-apply the sensor, make the *first* scan Juggluco on the watch, and don't scan it
-with any other app or device afterwards (a second Juggluco instance on a phone
-can steal the link even after a correct activation).
+problem is entitlement, not scheduling.
+
+**Prevention and fix — scan it with Juggluco on the phone.** Apply the sensor and
+make the activation scan Juggluco on the Android phone; that is the only device
+that can do it, since the watch has no NFC reader mode. A sensor that went wrong
+is recoverable: taking it over is another NFC scan from Juggluco on the phone.
+After the scan the phone is done — the sensor streams BLE to the watch and the
+phone can go off until the next sensor change. Don't scan the sensor with any
+other app or device in between, as each scan re-derives the keys and moves the
+entitlement.
 
 **`BgReceiver received action=… no recognised glucose key`.** A new Juggluco
 build introduced new extras keys. Read the `keys=...` list from the log and
@@ -565,6 +608,10 @@ Confirm with `aapt dump badging app-debug.apk | grep watch`.
   reading arrives without a direction, `?` is shown.
 - 28 MB APK. Could be trimmed substantially with R8 minification and dropping
   unused Compose Material components if size becomes a concern.
+- Not phone-free at sensor change. Every 15 days the new sensor needs an NFC
+  activation scan from Juggluco on an Android phone; nothing in this app can
+  remove that step, and the watch cannot perform the scan. Day-to-day operation
+  is phone-free.
 
 ## Licence
 
